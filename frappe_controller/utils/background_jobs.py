@@ -62,33 +62,19 @@ import anyio
 
 
 
-def start_worker(queue="default"):
-    """
-    Programmatic entry point to start the FastStream worker for a specific queue.
-    """
+def create_app(redis_url="redis://localhost:13000"):
     import frappe
-    if not getattr(frappe.local, "site", None):
-        frappe.init(frappe.utils.get_sites()[0])
-    redis_url = frappe.conf.get("redis_cache") or "redis://localhost:13000"
-
-    import redis
-    sync_redis = redis.Redis.from_url(redis_url)
-    INGESTION_STREAM = f"fs:queue:{queue}"
-    try:
-        sync_redis.xgroup_create(INGESTION_STREAM, "faststream_workers", id="0", mkstream=True)
-    except Exception:
-        pass
-    finally:
-        sync_redis.close()
-
+    import redis.asyncio as aioredis
+    from faststream import FastStream
+    from faststream.redis import RedisBroker, StreamSub
+    import anyio
+    
     redis_client = aioredis.from_url(redis_url)
     broker = RedisBroker(url=redis_url)
     app = FastStream(broker)
     
-    INGESTION_STREAM = f"fs:queue:{queue}"
-    DELAYED_JOBS_ZSET = f"fs:scheduled:{queue}"
-    FINISHED_STREAM = f"fs:finished:{queue}"
-    FAILED_STREAM = f"fs:failed:{queue}"
+    priority_queue = asyncio.PriorityQueue(maxsize=1000)
+    queues = ["high", "medium", "low"]
 
     async def check_rate_limits(method: str) -> float:
         lua_script = """
@@ -158,125 +144,203 @@ def start_worker(queue="default"):
         delay_until = await redis_client.eval(lua_script, 1, method, time.time())
         return delay_until
 
-    async def handle_ingestion(msg: Dict[str, Any]):
-        try:
-            payload_str = msg.get("payload")
-            if not payload_str:
-                return
+    @app.on_startup
+    async def worker_loop():
+        async def process_jobs():
+            while True:
+                priority, timestamp, job_data = await priority_queue.get()
                 
-            if isinstance(payload_str, bytes):
-                payload_str = payload_str.decode()
-                
-            import json
-            try:
-                payload = json.loads(payload_str)
-            except Exception as e:
-                return
-                
-            job_id = payload.get("name")
-            if not job_id:
-                return
-                
-            try:
-                method_path = payload.get("job_name")
-                args_str = payload.get("arguments")
-                
-                lock_key = f"fs:started:{job_id}"
-                is_locked = await redis_client.setnx(lock_key, "1")
-                if not is_locked:
-                    return
-
-                await redis_client.expire(lock_key, 3660)
-                
-                args = json.loads(args_str) if args_str else {}
-                
-                delay_until = await check_rate_limits(method_path)
-                
-                if delay_until > 0:
-                    await redis_client.zadd(DELAYED_JOBS_ZSET, {json.dumps(msg): delay_until})
-                    await redis_client.delete(lock_key)
-                    return
+                # Check for poison pill during graceful shutdown
+                if job_data is None:
+                    break
                     
-                start_time = time.time()
-                
-                site_name = payload.get("site")
-                if not site_name:
-                    site_name = getattr(frappe.local, "site", None) or frappe.utils.get_sites()[0]
-                
-                STARTED_STREAM = f"fs:started:{queue}"
-                await redis_client.xadd(STARTED_STREAM, {
-                    "payload": json.dumps({
-                        "job_id": job_id,
-                        "status": "Started",
-                        "started_at": str(frappe.utils.now_datetime()),
-                        "site": site_name
-                    }, default=str)
-                })
-
-                async def run_frappe():
-                    def execute():
-                        frappe.init(site=site_name, force=True)
-                        frappe.connect()
-                        try:
-                            func = frappe.get_attr(method_path)
-                            func(**args)
-                            frappe.db.commit()
-                        except Exception:
-                            frappe.db.rollback()
-                            raise
-                        finally:
-                            frappe.destroy()
-                    
-                    await anyio.to_thread.run_sync(execute)
-                        
-                error = None
-                status = "Finished"
+                msg = job_data["msg"]
+                queue_name = job_data["queue_name"]
+                event = job_data["event"]
                 
                 try:
-                    await run_frappe()
-                except Exception as e:
-                    status = "Failed"
-                    error = str(e)
+                    payload_str = msg.get("payload")
+                    if not payload_str:
+                        continue
+                        
+                    if isinstance(payload_str, bytes):
+                        payload_str = payload_str.decode()
+                        
+                    import json
+                    try:
+                        payload = json.loads(payload_str)
+                    except Exception:
+                        continue
+                        
+                    job_id = payload.get("name")
+                    if not job_id:
+                        continue
+                        
+                    method_path = payload.get("job_name")
+                    args_str = payload.get("arguments")
                     
-                time_taken = time.time() - start_time
-                
-                telemetry_stream = FINISHED_STREAM if status == "Finished" else FAILED_STREAM
-                await redis_client.xadd(telemetry_stream, {
-                    "payload": json.dumps({
-                        "job_id": job_id,
-                        "status": status,
-                        "error": error,
-                        "time_taken": time_taken,
-                        "site": site_name
-                    }, default=str)
-                })
-                
-            finally:
-                if getattr(frappe.local, "site", None):
-                    frappe.db.rollback()
-        except Exception as outer_e:
-            raise
+                    lock_key = f"fs:started:{job_id}"
+                    is_locked = await redis_client.setnx(lock_key, "1")
+                    if not is_locked:
+                        continue
+
+                    await redis_client.expire(lock_key, 3660)
+                    
+                    args = json.loads(args_str) if args_str else {}
+                    
+                    delay_until = await check_rate_limits(method_path)
+                    
+                    if delay_until > 0:
+                        DELAYED_JOBS_ZSET = f"fs:scheduled:{queue_name}"
+                        await redis_client.zadd(DELAYED_JOBS_ZSET, {json.dumps(msg): delay_until})
+                        await redis_client.delete(lock_key)
+                        continue
+                        
+                    start_time = time.time()
+                    
+                    site_name = payload.get("site")
+                    if not site_name:
+                        site_name = getattr(frappe.local, "site", None) or frappe.utils.get_sites()[0]
+                    
+                    STARTED_STREAM = f"fs:started:{queue_name}"
+                    await redis_client.xadd(STARTED_STREAM, {
+                        "payload": json.dumps({
+                            "job_id": job_id,
+                            "status": "Started",
+                            "started_at": str(frappe.utils.now_datetime()),
+                            "site": site_name
+                        }, default=str)
+                    })
+
+                    async def run_frappe():
+                        def execute():
+                            frappe.init(site=site_name, force=True)
+                            frappe.connect()
+                            try:
+                                func = frappe.get_attr(method_path)
+                                func(**args)
+                                frappe.db.commit()
+                            except Exception:
+                                frappe.db.rollback()
+                                raise
+                            finally:
+                                frappe.destroy()
+                        
+                        await anyio.to_thread.run_sync(execute)
+                            
+                    error = None
+                    status = "Finished"
+                    
+                    try:
+                        await run_frappe()
+                    except Exception as e:
+                        status = "Failed"
+                        error = str(e)
+                        
+                    time_taken = time.time() - start_time
+                    
+                    telemetry_stream = f"fs:finished:{queue_name}" if status == "Finished" else f"fs:failed:{queue_name}"
+                    await redis_client.xadd(telemetry_stream, {
+                        "payload": json.dumps({
+                            "job_id": job_id,
+                            "status": status,
+                            "error": error,
+                            "time_taken": time_taken,
+                            "site": site_name
+                        }, default=str)
+                    })
+                    
+                    if status == "Failed":
+                        job_data["status"] = "Failed"
+                        job_data["error"] = error
+                        
+                except Exception as outer_e:
+                    job_data["status"] = "Failed"
+                    job_data["error"] = str(outer_e)
+                finally:
+                    event.set()
+
+        asyncio.create_task(process_jobs())
 
     @app.on_startup
-    async def init_streams_and_promoter():
+    async def init_promoter():
         async def promote():
             while True:
                 current_time = time.time()
                 try:
-                    jobs = await redis_client.zrangebyscore(DELAYED_JOBS_ZSET, "-inf", current_time)
-                    if jobs:
-                        for job_str in jobs:
-                            job_data = json.loads(job_str)
-                            await broker.publish(job_data, stream=INGESTION_STREAM)
-                        await redis_client.zremrangebyscore(DELAYED_JOBS_ZSET, "-inf", current_time)
+                    for q in queues:
+                        delayed_zset = f"fs:scheduled:{q}"
+                        ingestion_stream = f"fs:queue:{q}"
+                        jobs = await redis_client.zrangebyscore(delayed_zset, "-inf", current_time)
+                        if jobs:
+                            for job_str in jobs:
+                                job_data = json.loads(job_str)
+                                await broker.publish(job_data, stream=ingestion_stream)
+                            await redis_client.zremrangebyscore(delayed_zset, "-inf", current_time)
                 except Exception:
                     pass
                 await asyncio.sleep(1)
 
         asyncio.create_task(promote())
 
-    # Dynamically bind the subscriber
-    broker.subscriber(stream=StreamSub(INGESTION_STREAM, group="faststream_workers", consumer="consumer-1"))(handle_ingestion)
+    @app.on_shutdown
+    async def shutdown_worker():
+        # Poison pill for graceful shutdown
+        await priority_queue.put((-1, time.time(), None))
+
+    async def ingest_high(msg: Dict[str, Any]):
+        event = anyio.Event()
+        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "Success", "error": None}
+        await priority_queue.put((1, time.time(), job_data))
+        await event.wait()
+        if job_data["status"] == "Failed":
+            raise Exception(job_data["error"])
+
+    async def ingest_medium(msg: Dict[str, Any]):
+        event = anyio.Event()
+        job_data = {"msg": msg, "queue_name": "medium", "event": event, "status": "Success", "error": None}
+        await priority_queue.put((2, time.time(), job_data))
+        await event.wait()
+        if job_data["status"] == "Failed":
+            raise Exception(job_data["error"])
+
+    async def ingest_low(msg: Dict[str, Any]):
+        event = anyio.Event()
+        job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "Success", "error": None}
+        await priority_queue.put((3, time.time(), job_data))
+        await event.wait()
+        if job_data["status"] == "Failed":
+            raise Exception(job_data["error"])
+
+    # Dynamically bind the subscribers
+    broker.subscriber(stream=StreamSub("fs:queue:high", group="faststream_workers", consumer="consumer-1"))(ingest_high)
+    broker.subscriber(stream=StreamSub("fs:queue:medium", group="faststream_workers", consumer="consumer-1"))(ingest_medium)
+    broker.subscriber(stream=StreamSub("fs:queue:low", group="faststream_workers", consumer="consumer-1"))(ingest_low)
+
+    return app, broker, priority_queue
+
+def start_worker(queue="default"):
+    """
+    Programmatic entry point to start the FastStream worker.
+    Handles all queues (high, medium, low) using a single unified priority queue.
+    """
+    import frappe
+    if not getattr(frappe.local, "site", None):
+        frappe.init(frappe.utils.get_sites()[0])
+    redis_url = frappe.conf.get("redis_cache") or "redis://localhost:13000"
+
+    import redis
+    sync_redis = redis.Redis.from_url(redis_url)
+    queues = ["high", "medium", "low"]
+    for q in queues:
+        try:
+            sync_redis.xgroup_create(f"fs:queue:{q}", "faststream_workers", id="0", mkstream=True)
+        except Exception:
+            pass
+    sync_redis.close()
+
+    import anyio
+    app, broker, priority_queue = create_app(redis_url)
 
     # Run the application
     anyio.run(app.run)
