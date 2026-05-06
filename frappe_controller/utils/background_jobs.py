@@ -178,8 +178,12 @@ def create_app(redis_url="redis://localhost:13000"):
                     args_str = payload.get("arguments")
                     total_tried = int(payload.get("total_tried", 0))
                     
+                    site_name = payload.get("site")
+                    if not site_name:
+                        site_name = frappe.utils.get_sites()[0]
+
                     # Pickup Lock / Heartbeat Key
-                    lock_key = f"fs:started:{job_id}"
+                    lock_key = f"fs:started:{site_name}:{job_id}"
                     is_locked = await redis_client.setnx(lock_key, "1")
                     if not is_locked:
                         continue
@@ -197,10 +201,6 @@ def create_app(redis_url="redis://localhost:13000"):
                         continue
                         
                     start_time = time.time()
-                    
-                    site_name = payload.get("site")
-                    if not site_name:
-                        site_name = frappe.utils.get_sites()[0]
 
                     STARTED_STREAM = f"fs:started:{queue_name}"
 
