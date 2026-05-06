@@ -29,6 +29,7 @@ class TestControllerJob(IntegrationTestCase):
 			job_name = enqueue("frappe_controller.tests.utils.test_controller.dummy_job", queue="low", kwarg1="test")
 			
 			self.assertTrue(frappe.db.exists("FS Job", job_name))
+			frappe.db.commit()
 			self.assertTrue(mock_xadd.called)
 			args, kwargs = mock_xadd.call_args
 			self.assertEqual(args[0], "fs:queue:low")
@@ -46,9 +47,11 @@ class TestControllerJob(IntegrationTestCase):
 		# check redis
 		key = "fs:frappe_controller.tests.utils.test_controller.dummy_sync:config"
 		raw_limits = frappe.cache().execute_command("HGETALL", key)
-		# Convert list [k1, v1, k2, v2] to dict
+		
 		limits = {}
-		if raw_limits:
+		if isinstance(raw_limits, dict):
+			limits = raw_limits
+		elif raw_limits:
 			for i in range(0, len(raw_limits), 2):
 				limits[raw_limits[i]] = raw_limits[i+1]
 		
