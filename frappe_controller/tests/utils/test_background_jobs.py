@@ -89,16 +89,16 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         await priority_queue.put((1, time.time(), {"msg": msg_high, "queue_name": "high", "event": high_event, "status": "Success", "error": None}))
 
         # Run the worker loop directly
-        worker_task = asyncio.create_task(app.router.lifespan.on_startup[0]()) # Assuming worker_loop is the first startup task
+        worker_task = asyncio.create_task(app._on_startup_calling[0]()) # Assuming worker_loop is the first startup task
         
         # Wait for High job to finish
         await high_event.wait()
         
-        # High job should have been executed BEFORE the remaining Low jobs
-        # Wait, the first Low job might have already started processing because it was popped first.
-        # But the High job will jump ahead of the remaining 4 Low jobs.
+        # Wait a little bit for the low jobs to append to the list
+        await asyncio.sleep(1.0)
         
         # Let's insert a Poison pill to stop the loop
+        await priority_queue.put((-1, time.time(), None))
         await priority_queue.put((-1, time.time(), None))
         await worker_task
         
@@ -130,11 +130,12 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "Success", "error": None}
         await priority_queue.put((3, time.time(), job_data))
         
-        worker_task = asyncio.create_task(app.router.lifespan.on_startup[0]())
+        worker_task = asyncio.create_task(app._on_startup_calling[0]())
         
         await event.wait()
         
         # Clean up
+        await priority_queue.put((-1, time.time(), None))
         await priority_queue.put((-1, time.time(), None))
         await worker_task
         
@@ -146,7 +147,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         # So we prove that the job_data correctly propagates the "Failed" state back to the ingestor!
         
         # Let's call the ingestor directly to verify it raises
-        ingest_task = [s.calls[0] for s in broker.subscribers.values() if s.stream.name == "fs:queue:low"][0]
+        ingest_task = [s.calls[0] for s in broker.subscribers if getattr(s.stream, 'name', '') == "fs:queue:low"][0]
         # Simulate FastStream calling it
         with self.assertRaises(Exception) as context:
             # We mock priority_queue so it doesn't block forever
@@ -178,7 +179,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         app, broker, priority_queue = create_app()
         
         # We can inspect the init_promoter task
-        promoter_task = app.router.lifespan.on_startup[1] # Assuming it's the second task
+        promoter_task = app._on_startup_calling[1] # Assuming it's the second task
         self.assertIsNotNone(promoter_task)
 
     async def test_telemetry_routing(self):
@@ -203,8 +204,8 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "Success", "error": None}
         await priority_queue.put((1, time.time(), job_data))
         
-        with mock.patch.object(aioredis.Redis, 'xadd') as mock_xadd:
-            worker_task = asyncio.create_task(app.router.lifespan.on_startup[0]())
+        with mock.patch.object(aioredis.Redis, 'xadd', new_callable=mock.AsyncMock) as mock_xadd:
+            worker_task = asyncio.create_task(app._on_startup_calling[0]())
             await event.wait()
             
             await priority_queue.put((-1, time.time(), None))
