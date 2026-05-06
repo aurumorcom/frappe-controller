@@ -56,12 +56,25 @@ def start_controller() -> NoReturn:
 
 	# 1. Startup Sweep: Catch any jobs lost while the controller was offline
 	logger.info("Running initial startup sweep for orphaned jobs...")
-	reconcile_orphaned_jobs()
+	for s in sites:
+		try:
+			frappe.init(s)
+			frappe.connect()
+			reconcile_orphaned_jobs()
+		except Exception as e:
+			logger.error(f"Error during startup sweep for site {s}: {e}")
+		finally:
+			frappe.destroy()
+
+	# Re-init back to the first site for general operations
+	frappe.init(site)
+	frappe.connect()
 
 	expired_jobs_queue = queue.Queue()
 
-	def listen_for_expirations():
+	def listen_for_expirations(site_name: str):
 		try:
+			frappe.init(site_name)
 			from redis import Redis
 			redis_url = frappe.conf.get("redis_cache") or "redis://localhost:13000"
 			r = Redis.from_url(redis_url)
@@ -74,13 +87,17 @@ def start_controller() -> NoReturn:
 					if isinstance(key, bytes):
 						key = key.decode('utf-8')
 					if key.startswith('fs:started:'):
-						job_id = key.split('fs:started:')[1]
-						expired_jobs_queue.put(job_id)
+						# Key format: fs:started:site_name:job_id
+						parts = key.split(':')
+						if len(parts) >= 4:
+							site_name = parts[2]
+							job_id = parts[3]
+							expired_jobs_queue.put((site_name, job_id))
 		except Exception as e:
 			logger.error(f"Keyspace listener error: {e}")
 
 	# 2. Start background thread to listen for expired heartbeats
-	threading.Thread(target=listen_for_expirations, daemon=True).start()
+	threading.Thread(target=listen_for_expirations, args=(site,), daemon=True).start()
 
 	streams = ["fs:started:low", "fs:started:medium", "fs:started:high", "fs:finished:low", "fs:failed:low", "fs:finished:medium", "fs:failed:medium", "fs:finished:high", "fs:failed:high"]
 	
@@ -95,15 +112,19 @@ def start_controller() -> NoReturn:
 		try:
 			# Process instant re-queuing for expired heartbeats
 			while not expired_jobs_queue.empty():
-				job_id = expired_jobs_queue.get()
+				job_site, job_id = expired_jobs_queue.get()
 				try:
+					if job_site and getattr(frappe.local, "site", None) != job_site:
+						frappe.init(site=job_site, force=True)
+						frappe.connect()
+
 					if not frappe.db.exists("FS Job", job_id):
 						continue
 					
 					job = frappe.get_doc("FS Job", job_id)
 					if job.status in ("Started", "Queued"):
 						# Double check heartbeat just in case
-						if cache.get(f"fs:started:{job_id}"):
+						if cache.get(f"fs:started:{job_site}:{job_id}"):
 							continue
 							
 						logger.warning(f"Heartbeat expired for job {job_id}. Re-queuing in real-time.")
@@ -181,14 +202,15 @@ def start_controller() -> NoReturn:
 						frappe.init(site=job_site, force=True)
 						frappe.connect()
 						
-					if status == "Started":
+					if status in ("Started", "Queued"):
 						sql = "UPDATE `tabFS Job` SET status = %s, total_tried = %s"
 						values = [status, cint(total_tried or 1)]
 						
-						# Automatically record started_at in the correct site timezone
-						# only if it hasn't been set yet, or if it's a retry
-						sql += ", started_at = COALESCE(started_at, %s)"
-						values.append(now_datetime())
+						if status == "Started":
+							# Automatically record started_at in the correct site timezone
+							# only if it hasn't been set yet, or if it's a retry
+							sql += ", started_at = COALESCE(started_at, %s)"
+							values.append(now_datetime())
 						
 						if error:
 							sql += ", exc_info = %s"
@@ -250,7 +272,7 @@ def reconcile_orphaned_jobs():
 	cache = frappe.cache()
 	for job_info in potential_lost_jobs:
 		# Check Pickup Lock / Heartbeat
-		lock_key = f"fs:started:{job_info.name}"
+		lock_key = f"fs:started:{frappe.local.site}:{job_info.name}"
 		if cache.get(lock_key):
 			continue
 
@@ -265,9 +287,15 @@ def reconcile_orphaned_jobs():
 		
 		# Ensure it's not already in delayed retry or rate-limit ZSETs
 		try:
-			if cache.execute_command('ZSCORE', f"fs:scheduled:{queue_name}", json.dumps(msg)) is not None:
-				continue
-			if cache.execute_command('ZSCORE', f"fs:deferred:{queue_name}", json.dumps(msg)) is not None:
+			def is_in_zset(zset_key):
+				items = cache.zrange(zset_key, 0, -1)
+				for item in items:
+					item_str = item.decode('utf-8') if isinstance(item, bytes) else str(item)
+					if f'"job_id": "{job_info.name}"' in item_str or f'"name": "{job_info.name}"' in item_str:
+						return True
+				return False
+
+			if is_in_zset(f"fs:scheduled:{queue_name}") or is_in_zset(f"fs:deferred:{queue_name}"):
 				continue
 		except Exception:
 			pass

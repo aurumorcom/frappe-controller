@@ -28,11 +28,14 @@ class ControllerJobType(Document):
 	# end: auto-generated types
 
 	def on_update(self):
-		cache = frappe.cache()
+		import redis
+		
 		key = f"fs:{self.method}:config"
+		redis_url = frappe.conf.get("redis_cache") or "redis://localhost:13000"
+		r = redis.Redis.from_url(redis_url)
 		
 		# Clear existing config
-		cache.delete_value(key, shared=True)
+		r.delete(key)
 		
 		limits = {}
 		if self.rate_limit_per_second:
@@ -48,8 +51,8 @@ class ControllerJobType(Document):
 		if self.retries:
 			limits["retries"] = str(self.retries)
 			
-		for k, v in limits.items():
-			cache.hset(key, k, v, shared=True)
+		if limits:
+			r.hset(key, mapping=limits)
 
 def sync_jobs(hooks: list | dict = None):
 	frappe.reload_doc("controller", "doctype", "controller_job_type")
@@ -84,15 +87,24 @@ def sync_jobs(hooks: list | dict = None):
 						defined_methods.append(key)
 						insert_single_event(key, value)
 					elif isinstance(value, list):
-						# Key is category, value is list of methods
-						for method in value:
-							if isinstance(method, str):
-								defined_methods.append(method)
-								insert_single_event(method)
-							elif isinstance(method, dict) and "method" in method:
-								m_name = method["method"]
-								defined_methods.append(m_name)
-								insert_single_event(m_name, method)
+						# Check if this is a merged dictionary from Frappe hooks
+						if all(isinstance(v, dict) and "method" not in v for v in value):
+							# Merge all the dictionaries in the list
+							merged_config = {}
+							for v in value:
+								merged_config.update(v)
+							defined_methods.append(key)
+							insert_single_event(key, merged_config)
+						else:
+							# Key is category, value is list of methods
+							for method in value:
+								if isinstance(method, str):
+									defined_methods.append(method)
+									insert_single_event(method)
+								elif isinstance(method, dict) and "method" in method:
+									m_name = method["method"]
+									defined_methods.append(m_name)
+									insert_single_event(m_name, method)
 
 	# Clear old ones
 	for job in frappe.get_all("Controller Job Type", fields=["name", "method", "server_script"]):
