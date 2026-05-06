@@ -16,6 +16,7 @@
   "method",
   "server_script",
   "create_log",
+  "retries",
   "rate_limit_section",
   "timeout",
   "status_section",
@@ -45,6 +46,12 @@
    "fieldname": "create_log",
    "fieldtype": "Check",
    "label": "Create Log"
+  },
+  {
+   "default": "0",
+   "fieldname": "retries",
+   "fieldtype": "Int",
+   "label": "Retries"
   },
   {
    "fieldname": "last_execution",
@@ -104,7 +111,7 @@
    "link_fieldname": "controller_job_type"
   }
  ],
- "modified": "2026-04-27 14:32:00.000000",
+ "modified": "2026-05-06 10:43:00.000000",
  "modified_by": "Administrator",
  "module": "Controller",
  "name": "Controller Job Type",

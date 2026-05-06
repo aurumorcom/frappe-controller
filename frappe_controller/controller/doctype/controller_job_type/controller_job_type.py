@@ -24,6 +24,7 @@ class ControllerJobType(Document):
 		rate_limit_per_minute: DF.Int
 		rate_limit_per_hour: DF.Int
 		rate_limit_per_day: DF.Int
+		retries: DF.Int
 	# end: auto-generated types
 
 	def on_update(self):
@@ -44,6 +45,8 @@ class ControllerJobType(Document):
 			limits["rate_limit_per_day"] = str(self.rate_limit_per_day)
 		if self.timeout:
 			limits["timeout"] = str(self.timeout)
+		if self.retries:
+			limits["retries"] = str(self.retries)
 			
 		for k, v in limits.items():
 			cache.hset(key, k, v, shared=True)
@@ -152,6 +155,13 @@ def insert_single_event(method: str, config: dict = None):
 	if timeout is not None:
 		try:
 			doc.timeout = int(timeout)
+		except (ValueError, TypeError):
+			pass
+
+	retries = get_val("retries")
+	if retries is not None:
+		try:
+			doc.retries = int(retries)
 		except (ValueError, TypeError):
 			pass
 	
