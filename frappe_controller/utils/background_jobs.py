@@ -17,7 +17,6 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 	# Find or create the Controller Job Type for this method
 	job_type_name = frappe.db.exists("Controller Job Type", {"method": method})
 	if not job_type_name:
-		# If not registered in hooks, we create a default one
 		job_type = frappe.get_doc({
 			"doctype": "Controller Job Type",
 			"method": method,
@@ -195,6 +194,7 @@ def create_app(redis_url="redis://localhost:13000"):
                     delay_until = await check_rate_limits(method_path)
                     
                     if delay_until > 0:
+                        # Rate limited: Move to scheduled ZSET
                         DELAYED_JOBS_ZSET = f"fs:scheduled:{queue_name}"
                         await redis_client.zadd(DELAYED_JOBS_ZSET, {json.dumps(msg): delay_until})
                         await redis_client.delete(lock_key)
