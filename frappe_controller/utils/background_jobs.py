@@ -41,13 +41,13 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 	job_payload = job.as_dict()
 	job_payload["site"] = frappe.local.site
 
-	# If site is initialized, commit so the daemon can see it immediately
+	# Push to Redis Stream for FastStream after the database transaction is committed.
+	# This prevents race conditions where the worker picks up the job before the DB record is visible.
 	if frappe.db:
-		frappe.db.commit()
-		# Push to Redis Stream for FastStream
-		frappe.cache().xadd(f"fs:queue:{queue}", {"payload": json.dumps(job_payload, default=str)})
+		frappe.db.after_commit.add(
+			lambda: frappe.cache().xadd(f"fs:queue:{queue}", {"payload": json.dumps(job_payload, default=str)})
+		)
 
-		
 	return job.name
 
 
