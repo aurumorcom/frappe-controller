@@ -124,7 +124,7 @@ def start_controller() -> NoReturn:
 					job = frappe.get_doc("FS Job", job_id)
 					if job.status in ("Started", "Queued"):
 						# Double check heartbeat just in case
-						if cache.get(f"fs:started:{job_id}"):
+						if cache.get(f"fs:started:{job_site}:{job_id}"):
 							continue
 							
 						logger.warning(f"Heartbeat expired for job {job_id}. Re-queuing in real-time.")
@@ -202,14 +202,15 @@ def start_controller() -> NoReturn:
 						frappe.init(site=job_site, force=True)
 						frappe.connect()
 						
-					if status == "Started":
+					if status in ("Started", "Queued"):
 						sql = "UPDATE `tabFS Job` SET status = %s, total_tried = %s"
 						values = [status, cint(total_tried or 1)]
 						
-						# Automatically record started_at in the correct site timezone
-						# only if it hasn't been set yet, or if it's a retry
-						sql += ", started_at = COALESCE(started_at, %s)"
-						values.append(now_datetime())
+						if status == "Started":
+							# Automatically record started_at in the correct site timezone
+							# only if it hasn't been set yet, or if it's a retry
+							sql += ", started_at = COALESCE(started_at, %s)"
+							values.append(now_datetime())
 						
 						if error:
 							sql += ", exc_info = %s"
@@ -286,9 +287,15 @@ def reconcile_orphaned_jobs():
 		
 		# Ensure it's not already in delayed retry or rate-limit ZSETs
 		try:
-			if cache.execute_command('ZSCORE', f"fs:scheduled:{queue_name}", json.dumps(msg)) is not None:
-				continue
-			if cache.execute_command('ZSCORE', f"fs:deferred:{queue_name}", json.dumps(msg)) is not None:
+			def is_in_zset(zset_key):
+				items = cache.zrange(zset_key, 0, -1)
+				for item in items:
+					item_str = item.decode('utf-8') if isinstance(item, bytes) else str(item)
+					if f'"job_id": "{job_info.name}"' in item_str or f'"name": "{job_info.name}"' in item_str:
+						return True
+				return False
+
+			if is_in_zset(f"fs:scheduled:{queue_name}") or is_in_zset(f"fs:deferred:{queue_name}"):
 				continue
 		except Exception:
 			pass
