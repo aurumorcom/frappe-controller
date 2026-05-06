@@ -184,9 +184,12 @@ def start_controller() -> NoReturn:
 					if status == "Started":
 						sql = "UPDATE `tabFS Job` SET status = %s, total_tried = %s"
 						values = [status, cint(total_tried or 1)]
-						if started_at:
-							sql += ", started_at = %s"
-							values.append(started_at)
+						
+						# Automatically record started_at in the correct site timezone
+						# only if it hasn't been set yet, or if it's a retry
+						sql += ", started_at = COALESCE(started_at, %s)"
+						values.append(now_datetime())
+						
 						if error:
 							sql += ", exc_info = %s"
 							values.append(error)

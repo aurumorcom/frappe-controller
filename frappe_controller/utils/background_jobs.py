@@ -203,15 +203,11 @@ def create_app(redis_url="redis://localhost:13000"):
                         site_name = frappe.utils.get_sites()[0]
 
                     STARTED_STREAM = f"fs:started:{queue_name}"
-                    
-                    import datetime
-                    start_time_str = str(datetime.datetime.now())
 
                     await redis_client.xadd(STARTED_STREAM, {
                         "payload": json.dumps({
                             "job_id": job_id,
                             "status": "Started",
-                            "started_at": start_time_str,
                             "site": site_name,
                             "total_tried": total_tried + 1
                         }, default=str)
