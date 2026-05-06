@@ -178,12 +178,13 @@ def create_app(redis_url="redis://localhost:13000"):
                     args_str = payload.get("arguments")
                     total_tried = int(payload.get("total_tried", 0))
                     
+                    # Pickup Lock / Heartbeat Key
                     lock_key = f"fs:started:{job_id}"
                     is_locked = await redis_client.setnx(lock_key, "1")
                     if not is_locked:
                         continue
 
-                    await redis_client.expire(lock_key, 3660)
+                    await redis_client.expire(lock_key, 60) # Initial 60s
                     
                     args = json.loads(args_str) if args_str else {}
                     
@@ -247,10 +248,11 @@ def create_app(redis_url="redis://localhost:13000"):
 
                     execution_done = anyio.Event()
                     
+                    # Worker Heartbeat Task - uses the pickup lock key
                     async def emit_heartbeat():
                         while not execution_done.is_set():
                             try:
-                                await redis_client.setex(f"fs:heartbeat:{job_id}", 30, "1")
+                                await redis_client.expire(lock_key, 30) # Maintain 30s TTL
                             except Exception:
                                 pass
                             await asyncio.sleep(5)
@@ -258,6 +260,7 @@ def create_app(redis_url="redis://localhost:13000"):
                     heartbeat_task = asyncio.create_task(emit_heartbeat())
 
                     try:
+                        # Enforce Execution Timeout (SLA)
                         async with anyio.fail_after(job_timeout):
                             await run_frappe()
                     except (Exception, TimeoutError) as e:
@@ -276,8 +279,6 @@ def create_app(redis_url="redis://localhost:13000"):
                             payload["total_tried"] = new_total_tried
                             msg["payload"] = json.dumps(payload, default=str)
                             
-                            # Use per-priority fs:deferred:{q} for retries
-                            # These will be promoted back to fs:queue:{q} to respect rate limits
                             await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
                             
                             await redis_client.xadd(STARTED_STREAM, {
@@ -297,7 +298,6 @@ def create_app(redis_url="redis://localhost:13000"):
                         
                     time_taken = time.time() - start_time
                     await redis_client.delete(lock_key)
-                    await redis_client.delete(f"fs:heartbeat:{job_id}")
 
                     if status != "Retrying":
                         telemetry_stream = f"fs:finished:{queue_name}" if status == "Finished" else f"fs:failed:{queue_name}"
