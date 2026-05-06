@@ -25,4 +25,20 @@ class FSJob(Document):
 		time_taken: DF.Duration | None
 		timeout: DF.Duration | None
 	# end: auto-generated types
-	pass
+	@frappe.whitelist()
+	def replay(self):
+		import json
+		self.status = "Queued"
+		self.started_at = None
+		self.ended_at = None
+		self.exc_info = None
+		self.time_taken = 0
+		self.save()
+
+		job_payload = self.as_dict()
+		job_payload["site"] = frappe.local.site
+		
+		queue = self.queue or "low"
+		frappe.cache().xadd(f"fs:queue:{queue}", {"payload": json.dumps(job_payload, default=str)})
+		
+		return True
