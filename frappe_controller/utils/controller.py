@@ -166,11 +166,11 @@ def sweep_lost_jobs():
 	The Sweeper: Scheduled task running every scheduler tick.
 	1. Finds 'Queued' jobs that aren't picked up.
 	2. Finds 'Started' jobs that have missing heartbeats (worker died).
+	Uses the 'fs:started:{job_id}' key for both locking and heartbeats.
 	"""
 	if not frappe.db.exists("DocType", "FS Job"):
 		return
 		
-	# Find both Queued and Started jobs
 	potential_lost_jobs = frappe.db.sql("""
 		SELECT name, queue, status, modified FROM `tabFS Job` 
 		WHERE status IN ('Queued', 'Started')
@@ -178,26 +178,16 @@ def sweep_lost_jobs():
 	
 	cache = frappe.cache()
 	for job_info in potential_lost_jobs:
-		# 1. Check Heartbeat for 'Started' jobs
-		if job_info.status == "Started":
-			heartbeat_key = f"fs:heartbeat:{job_info.name}"
-			if cache.get(heartbeat_key):
-				continue
-			
-			# If job just started (modified < 1 min ago), give it some grace
-			from frappe.utils import time_diff_in_seconds
-			if time_diff_in_seconds(now_datetime(), job_info.modified) < 60:
-				continue
-				
-			# No heartbeat and > 1 min since last update? Likely lost.
-			frappe.logger("controller").warning(f"Sweeper found started job {job_info.name} with missing heartbeat. Re-queuing.")
+		# Check Pickup Lock / Heartbeat
+		lock_key = f"fs:started:{job_info.name}"
+		if cache.get(lock_key):
+			continue
 		
-		# 2. Check pickup lock for 'Queued' jobs
-		else:
-			lock_key = f"fs:started:{job_info.name}"
-			if cache.get(lock_key):
-				continue
-			
+		# If job was recently modified, give it some grace before re-queuing
+		from frappe.utils import time_diff_in_seconds
+		if time_diff_in_seconds(now_datetime(), job_info.modified) < 60:
+			continue
+
 		queue_name = job_info.get("queue")
 		if queue_name not in ("low", "medium", "high"):
 			continue
@@ -209,20 +199,15 @@ def sweep_lost_jobs():
 		
 		# Ensure it's not already in delayed retry or rate-limit ZSETs
 		try:
-			# Check per-queue rate-limit delay
-			zscore = cache.execute_command('ZSCORE', f"fs:scheduled:{queue_name}", json.dumps(msg))
-			if zscore is not None:
+			if cache.execute_command('ZSCORE', f"fs:scheduled:{queue_name}", json.dumps(msg)) is not None:
 				continue
-			
-			# Check per-queue deferred retry queue
-			zscore_deferred = cache.execute_command('ZSCORE', f"fs:deferred:{queue_name}", json.dumps(msg))
-			if zscore_deferred is not None:
+			if cache.execute_command('ZSCORE', f"fs:deferred:{queue_name}", json.dumps(msg)) is not None:
 				continue
 		except Exception:
 			pass
 		
-		# Reset status to Queued if we found it in Started
 		if job.status == "Started":
+			frappe.logger("controller").warning(f"Sweeper found started job {job_info.name} with missing heartbeat. Re-queuing.")
 			job.db_set("status", "Queued")
 			
 		cache.xadd(f"fs:queue:{queue_name}", msg)
