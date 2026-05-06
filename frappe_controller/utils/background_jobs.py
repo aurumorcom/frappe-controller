@@ -190,7 +190,6 @@ def create_app(redis_url="redis://localhost:13000"):
                     delay_until = await check_rate_limits(method_path)
                     
                     if delay_until > 0:
-                        # Rate limited: Move to scheduled ZSET
                         DELAYED_JOBS_ZSET = f"fs:scheduled:{queue_name}"
                         await redis_client.zadd(DELAYED_JOBS_ZSET, {json.dumps(msg): delay_until})
                         await redis_client.delete(lock_key)
@@ -277,9 +276,9 @@ def create_app(redis_url="redis://localhost:13000"):
                             payload["total_tried"] = new_total_tried
                             msg["payload"] = json.dumps(payload, default=str)
                             
-                            # Use fs:deferred for retries as requested
-                            # Retries will be promoted back to fs:queue:{queue_name} to respect rate limits
-                            await redis_client.zadd("fs:deferred", {json.dumps(msg): time.time() + backoff})
+                            # Use per-priority fs:deferred:{q} for retries
+                            # These will be promoted back to fs:queue:{q} to respect rate limits
+                            await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
                             
                             await redis_client.xadd(STARTED_STREAM, {
                                 "payload": json.dumps({
@@ -333,30 +332,24 @@ def create_app(redis_url="redis://localhost:13000"):
             while True:
                 current_time = time.time()
                 try:
-                    # 1. Handle Rate-Limited Jobs
                     for q in queues:
-                        delayed_zset = f"fs:scheduled:{q}"
-                        ingestion_stream = f"fs:queue:{q}"
-                        jobs = await redis_client.zrangebyscore(delayed_zset, "-inf", current_time)
-                        if jobs:
-                            for job_str in jobs:
+                        # 1. Handle Rate-Limited Jobs
+                        scheduled_zset = f"fs:scheduled:{q}"
+                        jobs_sch = await redis_client.zrangebyscore(scheduled_zset, "-inf", current_time)
+                        if jobs_sch:
+                            for job_str in jobs_sch:
                                 job_data = json.loads(job_str)
-                                await broker.publish(job_data, stream=ingestion_stream)
-                            await redis_client.zremrangebyscore(delayed_zset, "-inf", current_time)
+                                await broker.publish(job_data, stream=f"fs:queue:{q}")
+                            await redis_client.zremrangebyscore(scheduled_zset, "-inf", current_time)
                             
-                    # 2. Handle Deferred Retries (unified)
-                    # These are published back to their originating stream to hit rate limits again
-                    deferred_jobs = await redis_client.zrangebyscore("fs:deferred", "-inf", current_time)
-                    if deferred_jobs:
-                        for job_str in deferred_jobs:
-                            msg_obj = json.loads(job_str)
-                            try:
-                                inner_payload = json.loads(msg_obj["payload"])
-                                target_q = inner_payload.get("queue", "low")
-                                await broker.publish(msg_obj, stream=f"fs:queue:{target_q}")
-                            except Exception:
-                                pass
-                        await redis_client.zremrangebyscore("fs:deferred", "-inf", current_time)
+                        # 2. Handle Deferred Retries (per-priority)
+                        deferred_zset = f"fs:deferred:{q}"
+                        jobs_def = await redis_client.zrangebyscore(deferred_zset, "-inf", current_time)
+                        if jobs_def:
+                            for job_str in jobs_def:
+                                job_data = json.loads(job_str)
+                                await broker.publish(job_data, stream=f"fs:queue:{q}")
+                            await redis_client.zremrangebyscore(deferred_zset, "-inf", current_time)
                             
                 except Exception:
                     pass
