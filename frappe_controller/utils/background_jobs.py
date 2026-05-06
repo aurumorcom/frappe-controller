@@ -146,6 +146,10 @@ def create_app(redis_url="redis://localhost:13000"):
 
     @app.on_startup
     async def worker_loop():
+        import logging
+        import traceback
+        worker_logger = logging.getLogger("faststream.worker")
+
         async def process_jobs():
             while True:
                 priority, timestamp, job_data = await priority_queue.get()
@@ -200,20 +204,29 @@ def create_app(redis_url="redis://localhost:13000"):
                     
                     site_name = payload.get("site")
                     if not site_name:
-                        site_name = getattr(frappe.local, "site", None) or frappe.utils.get_sites()[0]
-                    
+                        # BEWARE: Accessing frappe.local in async loop might be dangerous
+                        site_name = frappe.utils.get_sites()[0]
+
                     STARTED_STREAM = f"fs:started:{queue_name}"
+                    
+                    import datetime
+                    start_time_str = str(datetime.datetime.now())
+
                     await redis_client.xadd(STARTED_STREAM, {
                         "payload": json.dumps({
                             "job_id": job_id,
                             "status": "Started",
-                            "started_at": str(frappe.utils.now_datetime()),
+                            "started_at": start_time_str,
                             "site": site_name
                         }, default=str)
                     })
 
                     async def run_frappe():
                         def execute():
+                            # We must ensure we are in a clean state
+                            if getattr(frappe.local, "site", None):
+                                frappe.destroy()
+                                
                             frappe.init(site=site_name, force=True)
                             frappe.connect()
                             try:
@@ -236,6 +249,7 @@ def create_app(redis_url="redis://localhost:13000"):
                     except Exception as e:
                         status = "Failed"
                         error = str(e)
+                        worker_logger.error(f"Job {job_id} failed: {traceback.format_exc()}")
                         
                     time_taken = time.time() - start_time
                     
@@ -255,10 +269,13 @@ def create_app(redis_url="redis://localhost:13000"):
                         job_data["error"] = error
                         
                 except Exception as outer_e:
+                    worker_logger.error(f"Worker loop error: {traceback.format_exc()}")
                     job_data["status"] = "Failed"
                     job_data["error"] = str(outer_e)
                 finally:
                     event.set()
+
+        asyncio.create_task(process_jobs())
 
         asyncio.create_task(process_jobs())
 
