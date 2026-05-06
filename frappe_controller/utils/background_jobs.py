@@ -280,7 +280,7 @@ def create_app(redis_url="redis://localhost:13000"):
                             await redis_client.xadd(STARTED_STREAM, {
                                 "payload": json.dumps({
                                     "job_id": job_id,
-                                    "status": "Started",
+                                    "status": "Queued",
                                     "site": site_name,
                                     "total_tried": new_total_tried,
                                     "error": error
