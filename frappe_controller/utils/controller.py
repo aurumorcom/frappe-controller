@@ -18,6 +18,10 @@ def start_controller() -> NoReturn:
 	Telemetry Consumer.
 	Reads from 'controller:telemetry' Redis stream and updates MariaDB.
 	"""
+	import logging
+	import traceback
+	logger = logging.getLogger("frappe_controller.telemetry")
+	
 	set_niceness()
 
 	lock_path = _get_controller_lock_file()
@@ -26,39 +30,39 @@ def start_controller() -> NoReturn:
 		lock = FileLock(lock_path)
 		lock.acquire(blocking=False)
 	except Timeout:
-		frappe.logger("controller").debug("Controller already running")
+		logger.info("Controller already running")
 		return
 
 	# Setup site connection for background job
 	sites = get_sites()
 	if not sites:
+		logger.error("No sites found")
 		return
 	site = sites[0]
 	
+	logger.info(f"Starting telemetry consumer for site {site}")
 	frappe.init(site)
 	frappe.connect()
 	
 	cache = frappe.cache()
-	try:
-		for stream in ["fs:started:low", "fs:started:medium", "fs:started:high", "fs:finished:low", "fs:failed:low", "fs:finished:medium", "fs:failed:medium", "fs:finished:high", "fs:failed:high"]:
-			try:
-				cache.xgroup_create(stream, "telemetry_consumer_group", id="0", mkstream=True)
-			except Exception:
+	streams = ["fs:started:low", "fs:started:medium", "fs:started:high", "fs:finished:low", "fs:failed:low", "fs:finished:medium", "fs:failed:medium", "fs:finished:high", "fs:failed:high"]
+	
+	for stream in streams:
+		try:
+			cache.xgroup_create(stream, "telemetry_consumer_group", id="0", mkstream=True)
+			logger.info(f"Created consumer group for {stream}")
+		except Exception as e:
+			if "BUSYGROUP" in str(e):
 				pass
-	except Exception:
-		pass
+			else:
+				logger.warning(f"Could not create consumer group for {stream}: {e}")
 
 	while True:
 		try:
 			messages = cache.xreadgroup(
 				"telemetry_consumer_group",
 				"consumer-1",
-				{
-					"fs:started:low": ">", "fs:started:medium": ">", "fs:started:high": ">",
-					"fs:finished:low": ">", "fs:failed:low": ">",
-					"fs:finished:medium": ">", "fs:failed:medium": ">",
-					"fs:finished:high": ">", "fs:failed:high": ">"
-				},
+				{s: ">" for s in streams},
 				count=500,
 				block=5000
 			)
@@ -66,12 +70,15 @@ def start_controller() -> NoReturn:
 			if not messages:
 				continue
 				
+			logger.info(f"Received {len(messages)} stream updates")
 			stream_msg_ids = {}
 			for stream_name, stream_messages in messages:
 				if isinstance(stream_name, bytes):
 					stream_name = stream_name.decode("utf-8")
 				if stream_name not in stream_msg_ids:
 					stream_msg_ids[stream_name] = []
+				
+				logger.debug(f"Processing {len(stream_messages)} messages from {stream_name}")
 				for msg_id, payload in stream_messages:
 					stream_msg_ids[stream_name].append(msg_id)
 					if b"payload" in payload:
@@ -124,11 +131,17 @@ def start_controller() -> NoReturn:
 					# Check if job type wants log
 					job_type_name = frappe.db.get_value("FS Job", job_id, "job_type")
 					if job_type_name and frappe.db.get_value("Controller Job Type", job_type_name, "create_log"):
-						log = frappe.new_doc("Controller Job Log")
-						log.controller_job_type = job_type_name
-						log.status = "Failed" if status == "Failed" else "Complete"
-						log.details = error if error else "Finished successfully"
-						log.insert(ignore_permissions=True)
+						try:
+							# Use db_insert to bypass global hooks that might fail on sites
+							# without certain apps (like erpnext hooks on a non-erpnext site)
+							log = frappe.new_doc("Controller Job Log")
+							log.controller_job_type = job_type_name
+							log.status = "Failed" if status == "Failed" else "Complete"
+							log.details = error if error else "Finished successfully"
+							log.set_new_name() # Generate a name since we are bypassing insert()
+							log.db_insert()
+						except Exception as log_e:
+							logger.warning(f"Could not create Controller Job Log for {job_id}: {log_e}")
 						
 					frappe.db.commit()
 				
@@ -138,9 +151,9 @@ def start_controller() -> NoReturn:
 
 		except Exception as e:
 			frappe.db.rollback()
-			frappe.logger("controller").error("Telemetry loop error", exc_info=True)
+			logger.error(f"Telemetry loop error: {traceback.format_exc()}")
 			if "NOGROUP" in str(e):
-				for stream in ["fs:started:low", "fs:started:medium", "fs:started:high", "fs:finished:low", "fs:failed:low", "fs:finished:medium", "fs:failed:medium", "fs:finished:high", "fs:failed:high"]:
+				for stream in streams:
 					try:
 						cache.xgroup_create(stream, "telemetry_consumer_group", id="0", mkstream=True)
 					except Exception:
