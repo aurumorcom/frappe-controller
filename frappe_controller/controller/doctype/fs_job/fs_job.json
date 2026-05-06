@@ -11,6 +11,7 @@
   "job_type",
   "job_name",
   "queue",
+  "total_tried",
   "column_break_5",
   "arguments",
   "job_status_section",
@@ -111,11 +112,18 @@
    "label": "Job Type",
    "options": "Controller Job Type",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "total_tried",
+   "fieldtype": "Int",
+   "label": "Total Tried",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-27 18:07:00.000000",
+ "modified": "2026-05-06 10:44:00.000000",
  "modified_by": "Administrator",
  "module": "Controller",
  "name": "FS Job",
