@@ -11,7 +11,7 @@ frappe.ui.form.on("FS Job", {
 						frm.reload_doc();
 					}
 				});
-			}, __("Actions"));
+			});
 		}
 	},
 });
