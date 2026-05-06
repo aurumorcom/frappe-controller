@@ -214,8 +214,8 @@ def sweep_lost_jobs():
 			if zscore is not None:
 				continue
 			
-			# Check unified deferred retry queue
-			zscore_deferred = cache.execute_command('ZSCORE', "fs:deferred", json.dumps(msg))
+			# Check per-queue deferred retry queue
+			zscore_deferred = cache.execute_command('ZSCORE', f"fs:deferred:{queue_name}", json.dumps(msg))
 			if zscore_deferred is not None:
 				continue
 		except Exception:
