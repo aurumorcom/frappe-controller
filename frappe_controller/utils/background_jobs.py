@@ -261,7 +261,7 @@ def create_app(redis_url="redis://localhost:13000"):
 
                     try:
                         # Enforce Execution Timeout (SLA)
-                        async with anyio.fail_after(job_timeout):
+                        with anyio.fail_after(job_timeout):
                             await run_frappe()
                     except (Exception, TimeoutError) as e:
                         status = "Failed"
