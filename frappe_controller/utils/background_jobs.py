@@ -31,6 +31,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 		"job_name": method,
 		"queue": queue,
 		"status": "Queued",
+		"total_tried": 0,
 		"arguments": json.dumps(kwargs, default=str)
 	})
 	job.insert(ignore_permissions=True)
@@ -41,7 +42,6 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 	job_payload["site"] = frappe.local.site
 
 	# Push to Redis Stream for FastStream after the database transaction is committed.
-	# This prevents race conditions where the worker picks up the job before the DB record is visible.
 	if frappe.db:
 		frappe.db.after_commit.add(
 			lambda: frappe.cache().xadd(f"fs:queue:{queue}", {"payload": json.dumps(job_payload, default=str)})
@@ -58,8 +58,6 @@ import redis.asyncio as aioredis
 from faststream import FastStream
 from faststream.redis import RedisBroker, StreamSub
 import anyio
-
-
 
 def create_app(redis_url="redis://localhost:13000"):
     import frappe
@@ -106,7 +104,6 @@ def create_app(redis_url="redis://localhost:13000"):
             day = 86400
         }
         
-        -- Check all limits first
         if config['rate_limit_per_second'] and tonumber(redis.call('GET', keys.sec) or 0) >= config['rate_limit_per_second'] then
             return current_time + windows.sec
         end
@@ -120,7 +117,6 @@ def create_app(redis_url="redis://localhost:13000"):
             return current_time + windows.day
         end
         
-        -- If allowed, increment
         if config['rate_limit_per_second'] then
             local count = redis.call('INCR', keys.sec)
             if count == 1 then redis.call('EXPIRE', keys.sec, windows.sec) end
@@ -153,7 +149,6 @@ def create_app(redis_url="redis://localhost:13000"):
             while True:
                 priority, timestamp, job_data = await priority_queue.get()
                 
-                # Check for poison pill during graceful shutdown
                 if job_data is None:
                     break
                     
@@ -181,6 +176,7 @@ def create_app(redis_url="redis://localhost:13000"):
                         
                     method_path = payload.get("job_name")
                     args_str = payload.get("arguments")
+                    total_tried = int(payload.get("total_tried", 0))
                     
                     lock_key = f"fs:started:{job_id}"
                     is_locked = await redis_client.setnx(lock_key, "1")
@@ -204,7 +200,6 @@ def create_app(redis_url="redis://localhost:13000"):
                     
                     site_name = payload.get("site")
                     if not site_name:
-                        # BEWARE: Accessing frappe.local in async loop might be dangerous
                         site_name = frappe.utils.get_sites()[0]
 
                     STARTED_STREAM = f"fs:started:{queue_name}"
@@ -217,13 +212,13 @@ def create_app(redis_url="redis://localhost:13000"):
                             "job_id": job_id,
                             "status": "Started",
                             "started_at": start_time_str,
-                            "site": site_name
+                            "site": site_name,
+                            "total_tried": total_tried + 1
                         }, default=str)
                     })
 
                     async def run_frappe():
                         def execute():
-                            # We must ensure we are in a clean state
                             if getattr(frappe.local, "site", None):
                                 frappe.destroy()
                                 
@@ -244,25 +239,79 @@ def create_app(redis_url="redis://localhost:13000"):
                     error = None
                     status = "Finished"
                     
+                    config_key = f"fs:{method_path}:config"
+                    job_config = await redis_client.hgetall(config_key)
+                    job_config = {k.decode(): v.decode() for k, v in job_config.items()}
+                    
+                    max_retries = int(job_config.get("retries") or 0)
+                    job_timeout = int(job_config.get("timeout") or 3600)
+
+                    execution_done = anyio.Event()
+                    
+                    async def emit_heartbeat():
+                        while not execution_done.is_set():
+                            try:
+                                await redis_client.setex(f"fs:heartbeat:{job_id}", 30, "1")
+                            except Exception:
+                                pass
+                            await asyncio.sleep(5)
+                    
+                    heartbeat_task = asyncio.create_task(emit_heartbeat())
+
                     try:
-                        await run_frappe()
-                    except Exception as e:
+                        async with anyio.fail_after(job_timeout):
+                            await run_frappe()
+                    except (Exception, TimeoutError) as e:
                         status = "Failed"
-                        error = str(e)
-                        worker_logger.error(f"Job {job_id} failed: {traceback.format_exc()}")
+                        if isinstance(e, TimeoutError):
+                            error = f"Job timed out after {job_timeout} seconds"
+                        else:
+                            error = str(e)
+                        
+                        worker_logger.error(f"Job {job_id} failed (Attempt {total_tried + 1}): {error}")
+                        
+                        if total_tried + 1 < max_retries:
+                            new_total_tried = total_tried + 1
+                            backoff = min(30 * (2 ** new_total_tried), 3600) 
+                            
+                            payload["total_tried"] = new_total_tried
+                            msg["payload"] = json.dumps(payload, default=str)
+                            
+                            # Use fs:deferred for retries as requested
+                            # Retries will be promoted back to fs:queue:{queue_name} to respect rate limits
+                            await redis_client.zadd("fs:deferred", {json.dumps(msg): time.time() + backoff})
+                            
+                            await redis_client.xadd(STARTED_STREAM, {
+                                "payload": json.dumps({
+                                    "job_id": job_id,
+                                    "status": "Started",
+                                    "site": site_name,
+                                    "total_tried": new_total_tried,
+                                    "error": error
+                                }, default=str)
+                            })
+                            
+                            status = "Retrying" 
+                    finally:
+                        execution_done.set()
+                        heartbeat_task.cancel()
                         
                     time_taken = time.time() - start_time
-                    
-                    telemetry_stream = f"fs:finished:{queue_name}" if status == "Finished" else f"fs:failed:{queue_name}"
-                    await redis_client.xadd(telemetry_stream, {
-                        "payload": json.dumps({
-                            "job_id": job_id,
-                            "status": status,
-                            "error": error,
-                            "time_taken": time_taken,
-                            "site": site_name
-                        }, default=str)
-                    })
+                    await redis_client.delete(lock_key)
+                    await redis_client.delete(f"fs:heartbeat:{job_id}")
+
+                    if status != "Retrying":
+                        telemetry_stream = f"fs:finished:{queue_name}" if status == "Finished" else f"fs:failed:{queue_name}"
+                        await redis_client.xadd(telemetry_stream, {
+                            "payload": json.dumps({
+                                "job_id": job_id,
+                                "status": status,
+                                "error": error,
+                                "time_taken": time_taken,
+                                "site": site_name,
+                                "total_tried": total_tried + 1
+                            }, default=str)
+                        })
                     
                     if status == "Failed":
                         job_data["status"] = "Failed"
@@ -276,7 +325,6 @@ def create_app(redis_url="redis://localhost:13000"):
                     event.set()
 
         asyncio.create_task(process_jobs())
-
         asyncio.create_task(process_jobs())
 
     @app.on_startup
@@ -285,6 +333,7 @@ def create_app(redis_url="redis://localhost:13000"):
             while True:
                 current_time = time.time()
                 try:
+                    # 1. Handle Rate-Limited Jobs
                     for q in queues:
                         delayed_zset = f"fs:scheduled:{q}"
                         ingestion_stream = f"fs:queue:{q}"
@@ -294,6 +343,21 @@ def create_app(redis_url="redis://localhost:13000"):
                                 job_data = json.loads(job_str)
                                 await broker.publish(job_data, stream=ingestion_stream)
                             await redis_client.zremrangebyscore(delayed_zset, "-inf", current_time)
+                            
+                    # 2. Handle Deferred Retries (unified)
+                    # These are published back to their originating stream to hit rate limits again
+                    deferred_jobs = await redis_client.zrangebyscore("fs:deferred", "-inf", current_time)
+                    if deferred_jobs:
+                        for job_str in deferred_jobs:
+                            msg_obj = json.loads(job_str)
+                            try:
+                                inner_payload = json.loads(msg_obj["payload"])
+                                target_q = inner_payload.get("queue", "low")
+                                await broker.publish(msg_obj, stream=f"fs:queue:{target_q}")
+                            except Exception:
+                                pass
+                        await redis_client.zremrangebyscore("fs:deferred", "-inf", current_time)
+                            
                 except Exception:
                     pass
                 await asyncio.sleep(1)
@@ -302,7 +366,6 @@ def create_app(redis_url="redis://localhost:13000"):
 
     @app.on_shutdown
     async def shutdown_worker():
-        # Poison pill for graceful shutdown
         await priority_queue.put((-1, time.time(), None))
 
     async def ingest_high(msg: Dict[str, Any]):
@@ -329,7 +392,6 @@ def create_app(redis_url="redis://localhost:13000"):
         if job_data["status"] == "Failed":
             raise Exception(job_data["error"])
 
-    # Dynamically bind the subscribers
     broker.subscriber(stream=StreamSub("fs:queue:high", group="faststream_workers", consumer="consumer-1"))(ingest_high)
     broker.subscriber(stream=StreamSub("fs:queue:medium", group="faststream_workers", consumer="consumer-1"))(ingest_medium)
     broker.subscriber(stream=StreamSub("fs:queue:low", group="faststream_workers", consumer="consumer-1"))(ingest_low)
@@ -337,10 +399,6 @@ def create_app(redis_url="redis://localhost:13000"):
     return app, broker, priority_queue
 
 def start_worker(queue="default"):
-    """
-    Programmatic entry point to start the FastStream worker.
-    Handles all queues (high, medium, low) using a single unified priority queue.
-    """
     import frappe
     if not getattr(frappe.local, "site", None):
         frappe.init(frappe.utils.get_sites()[0])
@@ -358,6 +416,4 @@ def start_worker(queue="default"):
 
     import anyio
     app, broker, priority_queue = create_app(redis_url)
-
-    # Run the application
     anyio.run(app.run)
