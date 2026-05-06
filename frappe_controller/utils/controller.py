@@ -33,7 +33,6 @@ def start_controller() -> NoReturn:
 		logger.info("Controller already running")
 		return
 
-	# Setup site connection for background job
 	sites = get_sites()
 	if not sites:
 		logger.error("No sites found")
@@ -78,7 +77,6 @@ def start_controller() -> NoReturn:
 				if stream_name not in stream_msg_ids:
 					stream_msg_ids[stream_name] = []
 				
-				logger.debug(f"Processing {len(stream_messages)} messages from {stream_name}")
 				for msg_id, payload in stream_messages:
 					stream_msg_ids[stream_name].append(msg_id)
 					if b"payload" in payload:
@@ -100,8 +98,8 @@ def start_controller() -> NoReturn:
 					job_site = payload.get("site")
 					started_at = payload.get("started_at")
 					time_taken = payload.get("time_taken", 0)
+					total_tried = payload.get("total_tried")
 					
-					# Ensure payload strings are parsed correctly if they are bytes
 					if isinstance(job_id, bytes): job_id = job_id.decode('utf-8')
 					if isinstance(status, bytes): status = status.decode('utf-8')
 					if isinstance(error, bytes): error = error.decode('utf-8')
@@ -110,38 +108,41 @@ def start_controller() -> NoReturn:
 					if not job_id:
 						continue
 						
-					# Single db connection handles it
 					if job_site and getattr(frappe.local, "site", None) != job_site:
 						frappe.init(site=job_site, force=True)
 						frappe.connect()
 						
 					if status == "Started":
-						frappe.db.sql("""
-							UPDATE `tabFS Job`
-							SET status = %s, started_at = %s
-							WHERE name = %s
-						""", (status, started_at, job_id))
+						sql = "UPDATE `tabFS Job` SET status = %s, total_tried = %s"
+						values = [status, cint(total_tried or 1)]
+						if started_at:
+							sql += ", started_at = %s"
+							values.append(started_at)
+						if error:
+							sql += ", exc_info = %s"
+							values.append(error)
+						sql += " WHERE name = %s"
+						values.append(job_id)
+						frappe.db.sql(sql, tuple(values))
 					else:
 						frappe.db.sql("""
 							UPDATE `tabFS Job`
-							SET status = %s, exc_info = %s, ended_at = %s, time_taken = %s
+							SET status = %s, exc_info = %s, ended_at = %s, time_taken = %s, total_tried = %s
 							WHERE name = %s
-						""", (status, error, now_datetime(), time_taken, job_id))
+						""", (status, error, now_datetime(), time_taken, cint(total_tried), job_id))
 					
-					# Check if job type wants log
-					job_type_name = frappe.db.get_value("FS Job", job_id, "job_type")
-					if job_type_name and frappe.db.get_value("Controller Job Type", job_type_name, "create_log"):
-						try:
-							# Use db_insert to bypass global hooks that might fail on sites
-							# without certain apps (like erpnext hooks on a non-erpnext site)
-							log = frappe.new_doc("Controller Job Log")
-							log.controller_job_type = job_type_name
-							log.status = "Failed" if status == "Failed" else "Complete"
-							log.details = error if error else "Finished successfully"
-							log.set_new_name() # Generate a name since we are bypassing insert()
-							log.db_insert()
-						except Exception as log_e:
-							logger.warning(f"Could not create Controller Job Log for {job_id}: {log_e}")
+					if status in ("Finished", "Failed"):
+						job_type_name = frappe.db.get_value("FS Job", job_id, "job_type")
+						if job_type_name and frappe.db.get_value("Controller Job Type", job_type_name, "create_log"):
+							try:
+								log = frappe.new_doc("Controller Job Log")
+								log.controller_job_type = job_type_name
+								log.status = "Failed" if status == "Failed" else "Complete"
+								log.details = error if error else f"Finished successfully after {total_tried} attempts"
+								log.set_new_name()
+								log.db_insert()
+							except Exception as log_e:
+								logger.warning(f"Could not create Controller Job Log for {job_id}: {log_e}")
 						
 					frappe.db.commit()
 				
@@ -163,21 +164,39 @@ def start_controller() -> NoReturn:
 def sweep_lost_jobs():
 	"""
 	The Sweeper: Scheduled task running every scheduler tick.
-	Finds FS Jobs queued longer than the tick interval and re-pushes to Redis ingestion stream.
+	1. Finds 'Queued' jobs that aren't picked up.
+	2. Finds 'Started' jobs that have missing heartbeats (worker died).
 	"""
 	if not frappe.db.exists("DocType", "FS Job"):
 		return
 		
-	lost_jobs = frappe.db.sql("""
-		SELECT name, queue FROM `tabFS Job` 
-		WHERE status='Queued'
+	# Find both Queued and Started jobs
+	potential_lost_jobs = frappe.db.sql("""
+		SELECT name, queue, status, modified FROM `tabFS Job` 
+		WHERE status IN ('Queued', 'Started')
 	""", as_dict=True)
 	
 	cache = frappe.cache()
-	for job_info in lost_jobs:
-		lock_key = f"fs:started:{job_info.name}"
-		if cache.get(lock_key):
-			continue
+	for job_info in potential_lost_jobs:
+		# 1. Check Heartbeat for 'Started' jobs
+		if job_info.status == "Started":
+			heartbeat_key = f"fs:heartbeat:{job_info.name}"
+			if cache.get(heartbeat_key):
+				continue
+			
+			# If job just started (modified < 1 min ago), give it some grace
+			from frappe.utils import time_diff_in_seconds
+			if time_diff_in_seconds(now_datetime(), job_info.modified) < 60:
+				continue
+				
+			# No heartbeat and > 1 min since last update? Likely lost.
+			frappe.logger("controller").warning(f"Sweeper found started job {job_info.name} with missing heartbeat. Re-queuing.")
+		
+		# 2. Check pickup lock for 'Queued' jobs
+		else:
+			lock_key = f"fs:started:{job_info.name}"
+			if cache.get(lock_key):
+				continue
 			
 		queue_name = job_info.get("queue")
 		if queue_name not in ("low", "medium", "high"):
@@ -188,12 +207,23 @@ def sweep_lost_jobs():
 		job_payload["site"] = frappe.local.site
 		msg = {"payload": json.dumps(job_payload, default=str)}
 		
+		# Ensure it's not already in delayed retry or rate-limit ZSETs
 		try:
+			# Check per-queue rate-limit delay
 			zscore = cache.execute_command('ZSCORE', f"fs:scheduled:{queue_name}", json.dumps(msg))
 			if zscore is not None:
 				continue
+			
+			# Check unified deferred retry queue
+			zscore_deferred = cache.execute_command('ZSCORE', "fs:deferred", json.dumps(msg))
+			if zscore_deferred is not None:
+				continue
 		except Exception:
 			pass
+		
+		# Reset status to Queued if we found it in Started
+		if job.status == "Started":
+			job.db_set("status", "Queued")
 			
 		cache.xadd(f"fs:queue:{queue_name}", msg)
 
@@ -211,7 +241,6 @@ def create_job_log(job_type: str, status: str, details: str = None):
 def clear_old_logs():
 	"""
 	Deletes Controller Job Logs that are older than 30 days.
-	Intended to be run via daily scheduler event.
 	"""
 	try:
 		frappe.db.sql("""
