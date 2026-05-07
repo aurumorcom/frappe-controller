@@ -245,8 +245,17 @@ def start_controller() -> NoReturn:
 					cache.xack(s_name, "telemetry_consumer_group", *m_ids)
 
 		except Exception as e:
-			frappe.db.rollback()
 			logger.error(f"Telemetry loop error: {traceback.format_exc()}")
+			try:
+				if frappe.db:
+					frappe.db.rollback()
+			except Exception as db_e:
+				logger.error(f"Database rollback failed: {db_e}. Reconnecting...")
+				try:
+					frappe.connect()
+				except Exception:
+					pass
+					
 			if "NOGROUP" in str(e):
 				for stream in streams:
 					try:
