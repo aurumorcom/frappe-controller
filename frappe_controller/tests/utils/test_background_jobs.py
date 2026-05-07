@@ -201,7 +201,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
             "site": frappe.local.site
         })}
         
-        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "Success", "error": None}
+        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "finished", "error": None}
         await priority_queue.put((1, time.time(), job_data))
         
         with mock.patch.object(aioredis.Redis, 'xadd', new_callable=mock.AsyncMock) as mock_xadd:
