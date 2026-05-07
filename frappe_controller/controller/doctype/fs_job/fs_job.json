@@ -30,7 +30,8 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Queue",
-   "options": "low\nmedium\nhigh"
+   "options": "low\nmedium\nhigh",
+   "read_only": 1
   },
   {
    "fieldname": "status",
@@ -38,14 +39,16 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Queued\nStarted\nFinished\nFailed\nCanceled"
+   "options": "queued\nstarted\nfinished\nfailed\ncanceled",
+   "read_only": 1
   },
   {
    "fieldname": "job_id",
    "fieldtype": "Data",
    "label": "Job ID",
    "read_only": 1,
-   "unique": 1
+   "unique": 1,
+   "hidden": 1
   },
   {
    "fieldname": "exc_info",
@@ -86,24 +89,29 @@
   {
    "fieldname": "job_info_section",
    "fieldtype": "Section Break",
-   "label": "Job Info"
+   "label": "Job Info",
+   "read_only": 1
   },
   {
    "fieldname": "job_status_section",
    "fieldtype": "Section Break",
-   "label": "Job Status"
+   "label": "Job Status",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_5",
-   "fieldtype": "Column Break"
+   "fieldtype": "Column Break",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_11",
-   "fieldtype": "Column Break"
+   "fieldtype": "Column Break",
+   "read_only": 1
   },
   {
    "fieldname": "exception_section",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "read_only": 1
   },
   {
    "fieldname": "job_type",
@@ -111,7 +119,9 @@
    "in_list_view": 1,
    "label": "Job Type",
    "options": "Controller Job Type",
-   "reqd": 1
+   "reqd": 1,
+   "read_only": 1,
+   "hidden": 1
   },
   {
    "default": "0",
@@ -149,23 +159,23 @@
  "states": [
   {
    "color": "Yellow",
-   "title": "Queued"
+   "title": "queued"
   },
   {
    "color": "Blue",
-   "title": "Started"
+   "title": "started"
   },
   {
    "color": "Red",
-   "title": "Failed"
+   "title": "failed"
   },
   {
    "color": "Green",
-   "title": "Finished"
+   "title": "finished"
   },
   {
    "color": "Orange",
-   "title": "Canceled"
+   "title": "canceled"
   }
  ]
 }
