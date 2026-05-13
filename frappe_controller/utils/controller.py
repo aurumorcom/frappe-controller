@@ -14,6 +14,82 @@ from frappe.utils import get_bench_path, get_sites, now_datetime, cint
 from frappe.utils.background_jobs import set_niceness
 
 
+class SuspendJob(Exception):
+	"""Exception raised to suspend a job and free up the worker slot."""
+	def __init__(self, event_key, payload=None):
+		self.event_key = event_key
+		self.payload = payload
+		super().__init__(f"Job suspended waiting for event: {event_key}")
+
+
+def wait_for_event(event_key: str, condition: str = None, consider_events_since: str = None) -> dict:
+	"""
+	Registers a wait condition for the current job.
+	Performs a retroactive lookback to mitigate race conditions.
+	"""
+	if not getattr(frappe.flags, "current_job_id", None):
+		raise Exception("wait_for_event can only be called within an FS Job context")
+
+	job_id = frappe.flags.current_job_id
+	
+	# 1. Retroactive Lookback
+	filters = {"key": event_key}
+	if consider_events_since:
+		filters["creation"] = [">=", consider_events_since]
+	
+	events = frappe.get_all("FS Event", filters=filters, fields=["argument", "creation"], order_by="creation asc")
+	
+	for event in events:
+		argument = frappe.parse_json(event.argument)
+		if not condition or frappe.safe_eval(condition, None, {"argument": argument}):
+			return argument
+
+	# 2. Register Wait Condition
+	match_condition = frappe.get_doc({
+		"doctype": "FS Match Condition",
+		"job": job_id,
+		"event_key": event_key,
+		"condition": condition,
+		"consider_events_since": consider_events_since,
+		"is_satisfied": 0
+	})
+	match_condition.insert(ignore_permissions=True)
+	
+	# 3. Suspend Job
+	raise SuspendJob(event_key)
+
+
+def emit_event(key: str, argument: dict = None):
+	"""
+	Logs an event and notifies the orchestrator.
+	"""
+	event = frappe.get_doc({
+		"doctype": "FS Event",
+		"key": key,
+		"argument": json.dumps(argument, default=str) if argument else None
+	})
+	event.insert(ignore_permissions=True)
+	
+	# Notify orchestrator via Redis Stream
+	frappe.cache().xadd("fs:events", {"key": key, "event_id": event.name})
+
+
+def handle_doc_event(doc, method):
+	"""
+	Broadcaster for DocType events.
+	"""
+	if doc.doctype in ("FS Event", "FS Match Condition", "FS Job"):
+		return
+
+	if not frappe.db.table_exists("FS Event"):
+		return
+
+	# 1. Generic event
+	emit_event(f"doc:{doc.doctype}:{method}", doc.as_dict())
+	# 2. Specific event
+	emit_event(f"doc:{doc.doctype}:{method}:{doc.name}", doc.as_dict())
+
+
 def start_controller() -> NoReturn:
 	"""
 	Telemetry Consumer & Orchestrator.
@@ -99,7 +175,13 @@ def start_controller() -> NoReturn:
 	# 2. Start background thread to listen for expired heartbeats
 	threading.Thread(target=listen_for_expirations, args=(site,), daemon=True).start()
 
-	streams = ["fs:started:low", "fs:started:medium", "fs:started:high", "fs:finished:low", "fs:failed:low", "fs:finished:medium", "fs:failed:medium", "fs:finished:high", "fs:failed:high"]
+	streams = [
+		"fs:started:low", "fs:started:medium", "fs:started:high",
+		"fs:finished:low", "fs:failed:low",
+		"fs:finished:medium", "fs:failed:medium",
+		"fs:finished:high", "fs:failed:high",
+		"fs:events"
+	]
 	
 	for stream in streams:
 		try:
@@ -202,6 +284,53 @@ def start_controller() -> NoReturn:
 						frappe.init(site=job_site, force=True)
 						frappe.connect()
 						
+					if stream_name == "fs:events":
+						event_key = payload.get("key")
+						event_id = payload.get("event_id")
+						
+						if not event_key or not event_id:
+							continue
+							
+						# Find matching wait conditions
+						conditions = frappe.get_all("FS Match Condition", filters={
+							"event_key": event_key,
+							"is_satisfied": 0
+						}, fields=["name", "job", "condition", "consider_events_since"])
+						
+						if not conditions:
+							continue
+
+						event_doc = frappe.get_doc("FS Event", event_id)
+						event_argument = frappe.parse_json(event_doc.argument)
+						
+						for cond in conditions:
+							# Check lookback window
+							if cond.consider_events_since and event_doc.creation < cond.consider_events_since:
+								continue
+								
+							# Evaluate condition
+							if not cond.condition or frappe.safe_eval(cond.condition, None, {"argument": event_argument}):
+								# Satisfy condition
+								frappe.db.set_value("FS Match Condition", cond.name, "is_satisfied", 1)
+								
+								# Promote job from fs:deferred:
+								job_doc = frappe.get_doc("FS Job", cond.job)
+								queue_name = job_doc.queue
+								deferred_key = f"fs:deferred:{queue_name}"
+								
+								# Find and remove from deferred
+								items = cache.zrange(deferred_key, 0, -1)
+								for item in items:
+									item_str = item.decode('utf-8') if isinstance(item, bytes) else str(item)
+									if f'"name": "{job_doc.name}"' in item_str:
+										cache.zrem(deferred_key, item)
+										# Push to queue
+										cache.xadd(f"fs:queue:{queue_name}", {"payload": item_str})
+										break
+						
+						frappe.db.commit()
+						continue
+
 					if status in ("started", "queued"):
 						sql = "UPDATE `tabFS Job` SET status = %s, total_tried = %s"
 						values = [status, cint(total_tried or 1)]
