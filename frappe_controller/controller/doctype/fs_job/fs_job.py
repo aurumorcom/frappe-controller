@@ -21,14 +21,14 @@ class FSJob(Document):
 		job_type: DF.Link
 		queue: DF.Literal["default", "short", "long"]
 		started_at: DF.Datetime | None
-		status: DF.Literal["Queued", "Started", "Finished", "Failed", "Canceled"]
+		status: DF.Literal["queued", "started", "finished", "failed", "canceled"]
 		time_taken: DF.Duration | None
 		timeout: DF.Duration | None
 	# end: auto-generated types
 	@frappe.whitelist()
 	def replay(self):
 		import json
-		self.status = "Queued"
+		self.status = "queued"
 		self.started_at = None
 		self.ended_at = None
 		self.exc_info = None

@@ -122,7 +122,7 @@ def start_controller() -> NoReturn:
 						continue
 					
 					job = frappe.get_doc("FS Job", job_id)
-					if job.status in ("Started", "Queued"):
+					if job.status in ("started", "queued"):
 						# Double check heartbeat just in case
 						if cache.get(f"fs:started:{job_site}:{job_id}"):
 							continue
@@ -141,7 +141,7 @@ def start_controller() -> NoReturn:
 						except Exception:
 							pass
 						
-						job.db_set("status", "Queued")
+						job.db_set("status", "queued")
 						cache.xadd(f"fs:queue:{queue_name}", msg)
 						frappe.db.commit()
 				except Exception as e:
@@ -202,11 +202,11 @@ def start_controller() -> NoReturn:
 						frappe.init(site=job_site, force=True)
 						frappe.connect()
 						
-					if status in ("Started", "Queued"):
+					if status in ("started", "queued"):
 						sql = "UPDATE `tabFS Job` SET status = %s, total_tried = %s"
 						values = [status, cint(total_tried or 1)]
 						
-						if status == "Started":
+						if status == "started":
 							# Automatically record started_at in the correct site timezone
 							# only if it hasn't been set yet, or if it's a retry
 							sql += ", started_at = COALESCE(started_at, %s)"
@@ -225,13 +225,13 @@ def start_controller() -> NoReturn:
 							WHERE name = %s
 						""", (status, error, now_datetime(), time_taken, cint(total_tried), job_id))
 					
-					if status in ("Finished", "Failed"):
+					if status in ("finished", "failed"):
 						job_type_name = frappe.db.get_value("FS Job", job_id, "job_type")
 						if job_type_name and frappe.db.get_value("Controller Job Type", job_type_name, "create_log"):
 							try:
 								log = frappe.new_doc("Controller Job Log")
 								log.controller_job_type = job_type_name
-								log.status = "Failed" if status == "Failed" else "Complete"
+								log.status = "Failed" if status == "failed" else "Complete"
 								log.details = error if error else f"Finished successfully after {total_tried} attempts"
 								log.set_new_name()
 								log.db_insert()
@@ -267,15 +267,15 @@ def start_controller() -> NoReturn:
 def reconcile_orphaned_jobs():
 	"""
 	The Startup Sweeper (Reconciliation):
-	Runs on boot to find 'Queued' jobs that aren't picked up,
-	and 'Started' jobs that have missing heartbeats from previous runs.
+	Runs on boot to find 'queued' jobs that aren't picked up,
+	and 'started' jobs that have missing heartbeats from previous runs.
 	"""
 	if not frappe.db.exists("DocType", "FS Job"):
 		return
 		
 	potential_lost_jobs = frappe.db.sql("""
 		SELECT name, queue, status, modified FROM `tabFS Job` 
-		WHERE status IN ('Queued', 'Started')
+		WHERE status IN ('queued', 'started')
 	""", as_dict=True)
 	
 	cache = frappe.cache()
@@ -309,9 +309,9 @@ def reconcile_orphaned_jobs():
 		except Exception:
 			pass
 		
-		if job.status == "Started":
+		if job.status == "started":
 			frappe.logger("controller").warning(f"Startup Sweeper found lost started job {job_info.name}. Re-queuing.")
-			job.db_set("status", "Queued")
+			job.db_set("status", "queued")
 			
 		cache.xadd(f"fs:queue:{queue_name}", msg)
 

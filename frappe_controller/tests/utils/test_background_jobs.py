@@ -127,7 +127,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
             "site": frappe.local.site
         })}
         
-        job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "Success", "error": None}
+        job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "finished", "error": None}
         await priority_queue.put((3, time.time(), job_data))
         
         worker_task = asyncio.create_task(app._on_startup_calling[0]())
@@ -139,7 +139,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         await priority_queue.put((-1, time.time(), None))
         await worker_task
         
-        self.assertEqual(job_data["status"], "Failed")
+        self.assertEqual(job_data["status"], "failed")
         self.assertIn("Intentional Crash", job_data["error"])
         
         # In FastStream, the subscriber will do:
@@ -201,7 +201,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
             "site": frappe.local.site
         })}
         
-        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "Success", "error": None}
+        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "finished", "error": None}
         await priority_queue.put((1, time.time(), job_data))
         
         with mock.patch.object(aioredis.Redis, 'xadd', new_callable=mock.AsyncMock) as mock_xadd:

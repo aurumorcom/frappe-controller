@@ -30,7 +30,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 		"job_type": job_type_name,
 		"job_name": method,
 		"queue": queue,
-		"status": "Queued",
+		"status": "queued",
 		"total_tried": 0,
 		"arguments": json.dumps(kwargs, default=str)
 	})
@@ -207,7 +207,7 @@ def create_app(redis_url="redis://localhost:13000"):
                     await redis_client.xadd(STARTED_STREAM, {
                         "payload": json.dumps({
                             "job_id": job_id,
-                            "status": "Started",
+                            "status": "started",
                             "site": site_name,
                             "total_tried": total_tried + 1
                         }, default=str)
@@ -233,7 +233,7 @@ def create_app(redis_url="redis://localhost:13000"):
                         await anyio.to_thread.run_sync(execute)
                             
                     error = None
-                    status = "Finished"
+                    status = "finished"
                     
                     config_key = f"fs:{method_path}:config"
                     job_config = await redis_client.hgetall(config_key)
@@ -260,7 +260,7 @@ def create_app(redis_url="redis://localhost:13000"):
                         with anyio.fail_after(job_timeout):
                             await run_frappe()
                     except (Exception, TimeoutError) as e:
-                        status = "Failed"
+                        status = "failed"
                         if isinstance(e, TimeoutError):
                             error = f"Job timed out after {job_timeout} seconds"
                         else:
@@ -280,14 +280,14 @@ def create_app(redis_url="redis://localhost:13000"):
                             await redis_client.xadd(STARTED_STREAM, {
                                 "payload": json.dumps({
                                     "job_id": job_id,
-                                    "status": "Queued",
+                                    "status": "queued",
                                     "site": site_name,
                                     "total_tried": new_total_tried,
                                     "error": error
                                 }, default=str)
                             })
                             
-                            status = "Retrying" 
+                            status = "retrying" 
                     finally:
                         execution_done.set()
                         heartbeat_task.cancel()
@@ -295,8 +295,8 @@ def create_app(redis_url="redis://localhost:13000"):
                     time_taken = time.time() - start_time
                     await redis_client.delete(lock_key)
 
-                    if status != "Retrying":
-                        telemetry_stream = f"fs:finished:{queue_name}" if status == "Finished" else f"fs:failed:{queue_name}"
+                    if status != "retrying":
+                        telemetry_stream = f"fs:finished:{queue_name}" if status == "finished" else f"fs:failed:{queue_name}"
                         await redis_client.xadd(telemetry_stream, {
                             "payload": json.dumps({
                                 "job_id": job_id,
@@ -308,13 +308,13 @@ def create_app(redis_url="redis://localhost:13000"):
                             }, default=str)
                         })
                     
-                    if status == "Failed":
-                        job_data["status"] = "Failed"
+                    if status == "failed":
+                        job_data["status"] = "failed"
                         job_data["error"] = error
                         
                 except Exception as outer_e:
                     worker_logger.error(f"Worker loop error: {traceback.format_exc()}")
-                    job_data["status"] = "Failed"
+                    job_data["status"] = "failed"
                     job_data["error"] = str(outer_e)
                 finally:
                     event.set()
@@ -359,26 +359,26 @@ def create_app(redis_url="redis://localhost:13000"):
 
     async def ingest_high(msg: Dict[str, Any]):
         event = anyio.Event()
-        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "Success", "error": None}
+        job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "finished", "error": None}
         await priority_queue.put((1, time.time(), job_data))
         await event.wait()
-        if job_data["status"] == "Failed":
+        if job_data["status"] == "failed":
             raise Exception(job_data["error"])
 
     async def ingest_medium(msg: Dict[str, Any]):
         event = anyio.Event()
-        job_data = {"msg": msg, "queue_name": "medium", "event": event, "status": "Success", "error": None}
+        job_data = {"msg": msg, "queue_name": "medium", "event": event, "status": "finished", "error": None}
         await priority_queue.put((2, time.time(), job_data))
         await event.wait()
-        if job_data["status"] == "Failed":
+        if job_data["status"] == "failed":
             raise Exception(job_data["error"])
 
     async def ingest_low(msg: Dict[str, Any]):
         event = anyio.Event()
-        job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "Success", "error": None}
+        job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "finished", "error": None}
         await priority_queue.put((3, time.time(), job_data))
         await event.wait()
-        if job_data["status"] == "Failed":
+        if job_data["status"] == "failed":
             raise Exception(job_data["error"])
 
     broker.subscriber(stream=StreamSub("fs:queue:high", group="faststream_workers", consumer="consumer-1"))(ingest_high)
