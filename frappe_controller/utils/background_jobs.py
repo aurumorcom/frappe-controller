@@ -148,7 +148,7 @@ def create_app(redis_url="redis://localhost:13000"):
         async def process_jobs():
             while True:
                 priority, timestamp, job_data = await priority_queue.get()
-                
+
                 if job_data is None:
                     break
                     
