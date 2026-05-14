@@ -65,6 +65,112 @@ class TestControllerJob(IntegrationTestCase):
 			timeout_val = timeout_val.decode()
 		self.assertEqual(timeout_val, "300")
 
+class TestWaitForEvent(IntegrationTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		frappe.db.truncate("FS Job")
+		frappe.db.truncate("Controller Job Type")
+		frappe.db.truncate("FS Event")
+		frappe.db.truncate("FS Match Condition")
+		
+		frappe.get_doc({
+			"doctype": "Controller Job Type",
+			"method": "frappe.ping",
+			"create_log": 0
+		}).insert()
+		frappe.db.commit()
+
+	def setUp(self):
+		frappe.db.delete("FS Event")
+		frappe.db.delete("FS Match Condition")
+		frappe.db.delete("FS Job")
+		frappe.db.commit()
+
+	def test_wait_for_event_immediate_satisfaction(self):
+		from frappe_controller.utils.controller import wait_for_event, emit_event
+		
+		# 1. Create a job manually to avoid real worker picking it up
+		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type_name,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert()
+		job_id = job.name
+		frappe.flags.current_job_id = job_id
+		job.db_set("started_at", frappe.utils.now_datetime())
+		
+		# 2. Emit event BEFORE wait
+		emit_event("test_event", {"status": "ok"})
+		
+		# 3. Call wait_for_event - should return immediately
+		result = wait_for_event("test_event", consider_events_since=job.started_at)
+		self.assertEqual(result.get("status"), "ok")
+		
+		# 4. Verify no wait condition created (it was satisfied by lookback)
+		self.assertFalse(frappe.db.exists("FS Match Condition", {"job": job_id}))
+
+	def test_wait_for_event_suspension(self):
+		from frappe_controller.utils.controller import wait_for_event, SuspendJob
+		
+		# 1. Create a job manually
+		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type_name,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert()
+		job_id = job.name
+		frappe.flags.current_job_id = job_id
+		job.db_set("started_at", frappe.utils.now_datetime())
+		
+		# 2. Call wait_for_event - should raise SuspendJob
+		with self.assertRaises(SuspendJob) as cm:
+			wait_for_event("test_event", consider_events_since=job.started_at)
+		
+		self.assertEqual(cm.exception.event_key, "test_event")
+		
+		# 3. Verify wait condition created
+		self.assertTrue(frappe.db.exists("FS Match Condition", {"job": job_id, "event_key": "test_event"}))
+		
+	def test_wait_for_event_with_condition(self):
+		from frappe_controller.utils.controller import wait_for_event, emit_event, SuspendJob
+		
+		# 1. Create a job manually
+		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type_name,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert()
+		job_id = job.name
+		frappe.flags.current_job_id = job_id
+		job.db_set("started_at", frappe.utils.now_datetime())
+		
+		# 2. Emit event that doesn't match condition
+		emit_event("test_event", {"status": "pending"})
+		
+		# 3. Call wait_for_event - should still suspend because condition not met
+		with self.assertRaises(SuspendJob):
+			wait_for_event("test_event", condition="argument.get('status') == 'ok'", consider_events_since=job.started_at)
+			
+		# 4. Emit event that matches condition
+		emit_event("test_event", {"status": "ok"})
+		
+		# 5. Verify lookback works with condition
+		result = wait_for_event("test_event", condition="argument.get('status') == 'ok'", consider_events_since=job.started_at)
+		self.assertEqual(result.get("status"), "ok")
+
 def dummy_job(**kwargs):
 	pass
 
