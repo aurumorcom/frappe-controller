@@ -148,7 +148,7 @@ def create_app(redis_url="redis://localhost:13000"):
         async def process_jobs():
             while True:
                 priority, timestamp, job_data = await priority_queue.get()
-                
+
                 if job_data is None:
                     break
                     
@@ -220,6 +220,10 @@ def create_app(redis_url="redis://localhost:13000"):
                                 
                             frappe.init(site=site_name, force=True)
                             frappe.connect()
+                            
+                            # Set current job ID for wait_for_event
+                            frappe.flags.current_job_id = job_id
+                            
                             try:
                                 func = frappe.get_attr(method_path)
                                 func(**args)
@@ -260,34 +264,54 @@ def create_app(redis_url="redis://localhost:13000"):
                         with anyio.fail_after(job_timeout):
                             await run_frappe()
                     except (Exception, TimeoutError) as e:
-                        status = "failed"
-                        if isinstance(e, TimeoutError):
-                            error = f"Job timed out after {job_timeout} seconds"
-                        else:
-                            error = str(e)
+                        from frappe_controller.utils.controller import SuspendJob
                         
-                        worker_logger.error(f"Job {job_id} failed (Attempt {total_tried + 1}): {error}")
-                        
-                        if total_tried + 1 < max_retries:
-                            new_total_tried = total_tried + 1
-                            backoff = min(30 * (2 ** new_total_tried), 3600) 
+                        if isinstance(e, SuspendJob):
+                            status = "suspended"
+                            worker_logger.info(f"Job {job_id} suspended waiting for {e.event_key}")
                             
-                            payload["total_tried"] = new_total_tried
-                            msg["payload"] = json.dumps(payload, default=str)
+                            # Move to deferred with infinite score
+                            await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): 9999999999})
                             
-                            await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
-                            
+                            # Send telemetry (keep status as started in DB)
                             await redis_client.xadd(STARTED_STREAM, {
                                 "payload": json.dumps({
                                     "job_id": job_id,
-                                    "status": "queued",
+                                    "status": "started",
                                     "site": site_name,
-                                    "total_tried": new_total_tried,
-                                    "error": error
+                                    "total_tried": total_tried + 1,
+                                    "error": f"Suspended: waiting for {e.event_key}"
                                 }, default=str)
                             })
+                        else:
+                            status = "failed"
+                            if isinstance(e, TimeoutError):
+                                error = f"Job timed out after {job_timeout} seconds"
+                            else:
+                                error = str(e)
                             
-                            status = "retrying" 
+                            worker_logger.error(f"Job {job_id} failed (Attempt {total_tried + 1}): {error}")
+                            
+                            if total_tried + 1 < max_retries:
+                                new_total_tried = total_tried + 1
+                                backoff = min(30 * (2 ** new_total_tried), 3600) 
+                                
+                                payload["total_tried"] = new_total_tried
+                                msg["payload"] = json.dumps(payload, default=str)
+                                
+                                await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
+                                
+                                await redis_client.xadd(STARTED_STREAM, {
+                                    "payload": json.dumps({
+                                        "job_id": job_id,
+                                        "status": "queued",
+                                        "site": site_name,
+                                        "total_tried": new_total_tried,
+                                        "error": error
+                                    }, default=str)
+                                })
+                                
+                                status = "retrying" 
                     finally:
                         execution_done.set()
                         heartbeat_task.cancel()
@@ -295,7 +319,7 @@ def create_app(redis_url="redis://localhost:13000"):
                     time_taken = time.time() - start_time
                     await redis_client.delete(lock_key)
 
-                    if status != "retrying":
+                    if status not in ("retrying", "suspended"):
                         telemetry_stream = f"fs:finished:{queue_name}" if status == "finished" else f"fs:failed:{queue_name}"
                         await redis_client.xadd(telemetry_stream, {
                             "payload": json.dumps({

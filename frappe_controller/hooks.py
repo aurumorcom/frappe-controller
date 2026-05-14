@@ -132,13 +132,13 @@ app_license = "mit"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"*": {
+		"after_insert": "frappe_controller.utils.controller.handle_doc_event",
+		"on_update": "frappe_controller.utils.controller.handle_doc_event",
+		"on_trash": "frappe_controller.utils.controller.handle_doc_event"
+	}
+}
 
 # Scheduled Tasks
 # ---------------
