@@ -54,6 +54,7 @@ def wait_for_event(event_key: str, condition: str = None, consider_events_since:
 		"is_satisfied": 0
 	})
 	match_condition.insert(ignore_permissions=True)
+	frappe.db.commit()
 	
 	# 3. Suspend Job
 	raise SuspendJob(event_key)
