@@ -268,6 +268,7 @@ def start_controller() -> NoReturn:
 					job_id = payload.get("job_id")
 					status = payload.get("status")
 					error = payload.get("error")
+					result = payload.get("result")
 					job_site = payload.get("site")
 					started_at = payload.get("started_at")
 					time_taken = payload.get("time_taken", 0)
@@ -356,17 +357,30 @@ def start_controller() -> NoReturn:
 						""", (status, error, now_datetime(), time_taken, cint(total_tried), job_id))
 					
 					if status in ("finished", "failed"):
-						job_type_name = frappe.db.get_value("FS Job", job_id, "job_type")
+						job_type_name, parent_job = frappe.db.get_value("FS Job", job_id, ["job_type", "parent_job"])
 						if job_type_name and frappe.db.get_value("Controller Job Type", job_type_name, "create_log"):
 							try:
 								log = frappe.new_doc("Controller Job Log")
 								log.controller_job_type = job_type_name
+								log.job = job_id
 								log.status = "Failed" if status == "failed" else "Complete"
 								log.details = error if error else f"Finished successfully after {total_tried} attempts"
+								if status == "finished" and result is not None:
+									log.debug_log = json.dumps(result, default=str)
+								elif status == "failed" and error:
+									log.debug_log = error
 								log.set_new_name()
 								log.db_insert()
 							except Exception as log_e:
 								logger.warning(f"Could not create Controller Job Log for {job_id}: {log_e}")
+						
+						if parent_job:
+							if status == "finished":
+								emit_event(f"fs_job_finished:{job_id}")
+							elif status == "failed":
+								frappe.db.set_value("FS Job", parent_job, "status", "failed")
+								frappe.db.set_value("FS Job", parent_job, "exc_info", f"Child job {job_id} failed.")
+								emit_event(f"fs_job_finished:{job_id}")
 						
 					frappe.db.commit()
 				
