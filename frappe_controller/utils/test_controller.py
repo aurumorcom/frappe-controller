@@ -11,14 +11,19 @@ class TestControllerJob(IntegrationTestCase):
 
 		cls.job_type = frappe.get_doc({
 			"doctype": "Controller Job Type",
-			"method": "frappe_controller.tests.utils.test_controller.dummy_job",
+			"method": "frappe_controller.utils.test_controller.dummy_job",
 			"create_log": 1,
 			"rate_limit_per_minute": 10
 		}).insert()
 
 	@classmethod
 	def tearDownClass(cls):
-		frappe.db.rollback()
+		frappe.db.delete("Controller Job Type")
+		frappe.db.delete("FS Job")
+		frappe.db.delete("FS Event")
+		frappe.db.delete("FS Match Condition")
+		frappe.db.commit()
+		frappe.cache().delete_keys("fs:*")
 		super().tearDownClass()
 
 	def test_ingestion_push(self):
@@ -26,7 +31,8 @@ class TestControllerJob(IntegrationTestCase):
 		from frappe.utils.redis_wrapper import RedisWrapper
 		
 		with mock.patch.object(RedisWrapper, 'xadd') as mock_xadd:
-			job_name = enqueue("frappe_controller.tests.utils.test_controller.dummy_job", queue="low", kwarg1="test")
+			job_promise = enqueue("frappe_controller.utils.test_controller.dummy_job", queue="low", kwarg1="test")
+			job_name = job_promise.job_id
 			
 			self.assertTrue(frappe.db.exists("FS Job", job_name))
 			frappe.db.commit()
@@ -38,14 +44,14 @@ class TestControllerJob(IntegrationTestCase):
 	def test_config_sync(self):
 		job_type = frappe.get_doc({
 			"doctype": "Controller Job Type",
-			"method": "frappe_controller.tests.utils.test_controller.dummy_sync",
+			"method": "frappe_controller.utils.test_controller.dummy_sync",
 			"create_log": 1,
 			"rate_limit_per_minute": 50,
 			"timeout": 300
 		}).insert()
 		
 		# check redis
-		key = "fs:frappe_controller.tests.utils.test_controller.dummy_sync:config"
+		key = "fs:frappe_controller.utils.test_controller.dummy_sync:config"
 		raw_limits = frappe.cache().execute_command("HGETALL", key)
 		
 		limits = {}

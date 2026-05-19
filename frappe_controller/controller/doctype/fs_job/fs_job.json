@@ -129,6 +129,14 @@
    "fieldtype": "Int",
    "label": "Total Tried",
    "read_only": 1
+  },
+  {
+   "fieldname": "parent_job",
+   "fieldtype": "Link",
+   "label": "Parent Job",
+   "options": "FS Job",
+   "read_only": 1,
+   "hidden": 1
   }
  ],
  "index_web_pages_for_search": 1,
