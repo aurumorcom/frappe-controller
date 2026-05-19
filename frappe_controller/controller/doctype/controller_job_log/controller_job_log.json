@@ -42,6 +42,13 @@
    "fieldtype": "Code",
    "label": "Debug Log",
    "read_only": 1
+  },
+  {
+   "fieldname": "job",
+   "fieldtype": "Link",
+   "label": "Job",
+   "options": "FS Job",
+   "read_only": 1
   }
  ],
  "links": [],
