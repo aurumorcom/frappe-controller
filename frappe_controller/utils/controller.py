@@ -462,7 +462,7 @@ def clear_old_logs():
 	"""
 	try:
 		frappe.db.sql("""
-			DELETE FROM `tabFS Job Log`
+			DELETE FROM `tabController Job Log`
 			WHERE creation < DATE_SUB(NOW(), INTERVAL 30 DAY)
 		""")
 		frappe.db.commit()
