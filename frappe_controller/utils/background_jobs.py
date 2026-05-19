@@ -5,14 +5,49 @@ import json
 import frappe
 from frappe.utils import now_datetime
 
+class JobPromise:
+	def __init__(self, job_id):
+		self.job_id = job_id
+
+	def result(self):
+		import frappe
+		from frappe_controller.utils.controller import wait_for_event
+		
+		job = frappe.db.get_value("FS Job", self.job_id, ["status", "name"], as_dict=True)
+		if not job:
+			raise Exception(f"Job {self.job_id} not found.")
+			
+		if job.status == "finished":
+			return get_job_result(self.job_id)
+		elif job.status == "failed":
+			raise Exception(f"Job {self.job_id} failed.")
+			
+		# Suspend and wait for this specific job to finish
+		wait_for_event(f"fs_job_finished:{self.job_id}")
+
 def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 	"""
 	Replacement for frappe.enqueue. 
 	Instead of enqueuing directly to Redis, it creates a Controller Job record in MariaDB.
+	Returns a JobPromise object.
 	"""
+	import frappe
+	import json
+	
 	if queue not in ("low", "medium", "high"):
 		import frappe.utils.background_jobs as native_bg
 		return native_bg.enqueue(method, queue=queue, timeout=timeout, is_async=is_async, **kwargs)
+
+	parent_job_id = getattr(frappe.flags, "current_job_id", None)
+	current_idx = None
+	
+	if parent_job_id:
+		current_idx = getattr(frappe.flags, "current_job_step", 0)
+		frappe.flags.current_job_step = current_idx + 1
+		
+		existing_job = frappe.db.get_value("FS Job", {"parent_job": parent_job_id, "idx": current_idx}, "name")
+		if existing_job:
+			return JobPromise(existing_job)
 
 	# Find or create the Controller Job Type for this method
 	job_type_name = frappe.db.exists("Controller Job Type", {"method": method})
@@ -32,6 +67,8 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 		"queue": queue,
 		"status": "queued",
 		"total_tried": 0,
+		"parent_job": parent_job_id,
+		"idx": current_idx,
 		"arguments": json.dumps(kwargs, default=str)
 	})
 	job.insert(ignore_permissions=True)
@@ -47,8 +84,12 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 			lambda: frappe.cache().xadd(f"fs:queue:{queue}", {"payload": json.dumps(job_payload, default=str)})
 		)
 
-	return job.name
+	return JobPromise(job.name)
 
+
+def get_job_result(job_name: str):
+	log = frappe.db.get_value("Controller Job Log", {"job": job_name, "status": "Complete"}, "debug_log")
+	return json.loads(log) if log else None
 
 import asyncio
 import time
@@ -223,21 +264,24 @@ def create_app(redis_url="redis://localhost:13000"):
                             
                             # Set current job ID for wait_for_event
                             frappe.flags.current_job_id = job_id
+                            frappe.flags.current_job_step = 0
                             
                             try:
                                 func = frappe.get_attr(method_path)
-                                func(**args)
+                                result = func(**args)
                                 frappe.db.commit()
+                                return result
                             except Exception:
                                 frappe.db.rollback()
                                 raise
                             finally:
                                 frappe.destroy()
                         
-                        await anyio.to_thread.run_sync(execute)
+                        return await anyio.to_thread.run_sync(execute)
                             
                     error = None
                     status = "finished"
+                    result = None
                     
                     config_key = f"fs:{method_path}:config"
                     job_config = await redis_client.hgetall(config_key)
@@ -262,7 +306,7 @@ def create_app(redis_url="redis://localhost:13000"):
                     try:
                         # Enforce Execution Timeout (SLA)
                         with anyio.fail_after(job_timeout):
-                            await run_frappe()
+                            result = await run_frappe()
                     except (Exception, TimeoutError) as e:
                         from frappe_controller.utils.controller import SuspendJob
                         
@@ -326,6 +370,7 @@ def create_app(redis_url="redis://localhost:13000"):
                                 "job_id": job_id,
                                 "status": status,
                                 "error": error,
+                                "result": result,
                                 "time_taken": time_taken,
                                 "site": site_name,
                                 "total_tried": total_tried + 1
