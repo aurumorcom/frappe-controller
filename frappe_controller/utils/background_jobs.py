@@ -25,9 +25,9 @@ class JobPromise:
 		# Suspend and wait for this specific job to finish
 		wait_for_event(f"fs_job_finished:{self.job_id}")
 
-def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
+def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **kwargs):
 	"""
-	Replacement for frappe.enqueue. 
+	Replacement for frappe.enqueue.
 	Instead of enqueuing directly to Redis, it creates a Controller Job record in MariaDB.
 	Returns a JobPromise object.
 	"""
@@ -38,7 +38,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, **kwargs):
 		import frappe.utils.background_jobs as native_bg
 		return native_bg.enqueue(method, queue=queue, timeout=timeout, is_async=is_async, **kwargs)
 
-	parent_job_id = getattr(frappe.flags, "current_job_id", None)
+	parent_job_id = getattr(frappe.flags, "current_job_id", None) if as_child else None
 	current_idx = None
 	
 	if parent_job_id:
