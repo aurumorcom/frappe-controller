@@ -191,6 +191,11 @@ def start_controller() -> NoReturn:
 			if "BUSYGROUP" not in str(e):
 				logger.warning(f"Could not create consumer group for {stream}: {e}")
 
+	# Ensure all streams exist before reading to avoid NOGROUP errors
+	for stream in streams:
+		if not cache.exists(stream):
+			cache.xadd(stream, {"_ping": "1"})
+
 	while True:
 		try:
 			# Process instant re-queuing for expired heartbeats
