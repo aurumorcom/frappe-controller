@@ -231,6 +231,9 @@ def create_app(redis_url="redis://localhost:13000"):
 
                     await redis_client.expire(lock_key, 60) # Initial 60s
                     
+                    # Clear stale promoted flag to avoid skipping future suspensions
+                    await redis_client.delete(f"fs:promoted:{job_id}")
+                    
                     args = json.loads(args_str) if args_str else {}
                     
                     delay_until = await check_rate_limits(method_path)
@@ -238,6 +241,16 @@ def create_app(redis_url="redis://localhost:13000"):
                     if delay_until > 0:
                         DELAYED_JOBS_ZSET = f"fs:scheduled:{queue_name}"
                         await redis_client.zadd(DELAYED_JOBS_ZSET, {json.dumps(msg): delay_until})
+                        
+                        await redis_client.xadd(f"fs:scheduled:{queue_name}", {
+                            "payload": json.dumps({
+                                "job_id": job_id,
+                                "status": "scheduled",
+                                "site": site_name,
+                                "total_tried": total_tried
+                            }, default=str)
+                        })
+                        
                         await redis_client.delete(lock_key)
                         continue
                         
@@ -314,14 +327,24 @@ def create_app(redis_url="redis://localhost:13000"):
                             status = "suspended"
                             worker_logger.info(f"Job {job_id} suspended waiting for {e.event_key}")
                             
-                            # Move to deferred with infinite score
-                            await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): 9999999999})
+                            # Race condition fix: Check if orchestrator already promoted this job
+                            # while we were in the process of suspending.
+                            is_promoted = await redis_client.get(f"fs:promoted:{job_id}")
+                            if is_promoted:
+                                worker_logger.info(f"Job {job_id} was already promoted. Re-queuing directly.")
+                                await redis_client.delete(f"fs:promoted:{job_id}")
+                                
+                                # Push back to the end of the queue directly
+                                await broker.publish(msg, stream=f"fs:queue:{queue_name}")
+                            else:
+                                # Move to deferred with infinite score
+                                await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): 9999999999})
                             
-                            # Send telemetry (keep status as started in DB)
-                            await redis_client.xadd(STARTED_STREAM, {
+                            # Send telemetry
+                            await redis_client.xadd(f"fs:deferred:{queue_name}", {
                                 "payload": json.dumps({
                                     "job_id": job_id,
-                                    "status": "started",
+                                    "status": "deferred",
                                     "site": site_name,
                                     "total_tried": total_tried + 1,
                                     "error": f"Suspended: waiting for {e.event_key}"
@@ -345,17 +368,17 @@ def create_app(redis_url="redis://localhost:13000"):
                                 
                                 await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
                                 
-                                await redis_client.xadd(STARTED_STREAM, {
+                                await redis_client.xadd(f"fs:deferred:{queue_name}", {
                                     "payload": json.dumps({
                                         "job_id": job_id,
-                                        "status": "queued",
+                                        "status": "deferred",
                                         "site": site_name,
                                         "total_tried": new_total_tried,
                                         "error": error
                                     }, default=str)
                                 })
                                 
-                                status = "retrying" 
+                                status = "retrying"
                     finally:
                         execution_done.set()
                         heartbeat_task.cancel()
