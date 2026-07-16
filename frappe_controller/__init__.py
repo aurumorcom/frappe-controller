@@ -1,1 +1,74 @@
 __version__ = "0.0.1"
+
+import inspect
+import frappe
+from frappe.utils import background_jobs
+
+_original_enqueue = background_jobs.enqueue
+_enqueue_sig = inspect.signature(_original_enqueue)
+
+def _patched_enqueue(*args, **kwargs):
+    try:
+        bound_args = _enqueue_sig.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+    except Exception:
+        # If binding fails, just fallback to original enqueue to handle the error natively
+        return _original_enqueue(*args, **kwargs)
+    
+    args_dict = bound_args.arguments
+    method = args_dict.get("method")
+    now = args_dict.get("now")
+    is_async = args_dict.get("is_async")
+    
+    # Handle legacy async kwarg which frappe.enqueue handles
+    job_kwargs = args_dict.get("kwargs", {})
+    if "async" in job_kwargs:
+        is_async = job_kwargs["async"]
+
+    call_directly = now or (not is_async and not frappe.in_test)
+    if call_directly:
+        return _original_enqueue(*args, **kwargs)
+        
+    if callable(method):
+        method_name = f"{method.__module__}.{method.__qualname__}"
+    else:
+        method_name = method
+        
+    actual_method_name = method_name
+    
+    if method_name == "frappe.core.doctype.scheduled_job_type.scheduled_job_type.run_scheduled_job":
+        actual_method_name = job_kwargs.get("job_type") or method_name
+        
+    controller_events = frappe.get_hooks("controller_events") or {}
+    
+    if actual_method_name in controller_events:
+        try:
+            from frappe_controller.utils.background_jobs import enqueue as controller_enqueue
+            
+            # If we intercepted a scheduled job, strip the scheduler kwargs
+            if actual_method_name != method_name:
+                job_kwargs.pop("job_type", None)
+                job_kwargs.pop("scheduled_job_type", None)
+                
+            queue = args_dict.get("queue")
+            timeout = args_dict.get("timeout")
+            
+            return controller_enqueue(
+                method=actual_method_name,
+                queue=queue,
+                timeout=timeout,
+                is_async=is_async,
+                **job_kwargs
+            )
+        except ImportError:
+            # Graceful degradation if frappe_controller is not available
+            pass
+        except Exception as e:
+            frappe.logger("frappe_controller").error(f"Failed to route job to controller queue: {e}")
+            pass
+            
+    return _original_enqueue(*args, **kwargs)
+
+# Apply monkey patch
+background_jobs.enqueue = _patched_enqueue
+frappe.enqueue = _patched_enqueue
