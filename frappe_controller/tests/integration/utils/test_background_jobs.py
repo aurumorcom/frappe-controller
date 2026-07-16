@@ -38,22 +38,22 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         # Setup dummy types
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.utils.test_background_jobs.dummy_slow_job",
+            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_slow_job",
             "create_log": 0
         }).insert()
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.utils.test_background_jobs.dummy_fast_job",
+            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_fast_job",
             "create_log": 0
         }).insert()
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.utils.test_background_jobs.dummy_failing_job",
+            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_failing_job",
             "create_log": 0
         }).insert()
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.utils.test_background_jobs.dummy_suspending_job",
+            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job",
             "create_log": 0
         }).insert()
         frappe.db.commit()
@@ -98,7 +98,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
             event = anyio.Event()
             msg = {"payload": json.dumps({
                 "name": f"low_job_{i}",
-                "job_name": "frappe_controller.utils.test_background_jobs.dummy_slow_job",
+                "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_slow_job",
                 "arguments": json.dumps({"job_id": i}),
                 "site": frappe.local.site
             })}
@@ -110,7 +110,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         high_event = anyio.Event()
         msg_high = {"payload": json.dumps({
             "name": "high_job_1",
-            "job_name": "frappe_controller.utils.test_background_jobs.dummy_fast_job",
+            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_fast_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -150,7 +150,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         event = anyio.Event()
         msg = {"payload": json.dumps({
             "name": "fail_job_1",
-            "job_name": "frappe_controller.utils.test_background_jobs.dummy_failing_job",
+            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_failing_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -230,7 +230,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         event = anyio.Event()
         msg = {"payload": json.dumps({
             "name": "telemetry_job_1",
-            "job_name": "frappe_controller.utils.test_background_jobs.dummy_fast_job",
+            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_fast_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -266,11 +266,11 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         app, broker, priority_queue = create_app()
         
         # 1. Create a job record manually to avoid real worker picking it up
-        job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe_controller.utils.test_background_jobs.dummy_suspending_job"})
+        job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job"})
         job = frappe.get_doc({
             "doctype": "FS Job",
             "job_type": job_type_name,
-            "job_name": "frappe_controller.utils.test_background_jobs.dummy_suspending_job",
+            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job",
             "queue": "low",
             "status": "queued",
             "arguments": "{}"
@@ -280,7 +280,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         event = anyio.Event()
         msg = {"payload": json.dumps({
             "name": job.name,
-            "job_name": "frappe_controller.utils.test_background_jobs.dummy_suspending_job",
+            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -731,3 +731,113 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         result = enqueue("dummy_large_payload").result()
         
         self.assertEqual(result, large_data)
+
+class TestStatusLifecycle(IntegrationTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        frappe.db.truncate("FS Job")
+        frappe.db.truncate("Controller Job Log")
+        frappe.db.truncate("Controller Job Type")
+        
+        cls.job_type = frappe.get_doc({
+            "doctype": "Controller Job Type",
+            "method": "dummy_method",
+            "create_log": 1
+        }).insert()
+        frappe.db.commit()
+
+    @classmethod
+    def tearDownClass(cls):
+        frappe.db.delete("Controller Job Type")
+        frappe.db.delete("FS Job")
+        frappe.db.delete("Controller Job Log")
+        frappe.db.commit()
+        super().tearDownClass()
+
+    def setUp(self):
+        super().setUp()
+        frappe.db.delete("FS Job")
+        frappe.db.delete("Controller Job Log")
+        frappe.db.commit()
+        frappe.cache().delete_keys("fs:*")
+
+    def test_fs_job_cleanup_on_completion(self):
+        from frappe_controller.utils.controller import process_telemetry_messages
+        import json
+        
+        # 1. Create a dummy FS Job
+        job = frappe.get_doc({
+            "doctype": "FS Job",
+            "job_type": self.job_type.name,
+            "job_name": "dummy_method",
+            "queue": "low",
+            "status": "started",
+            "arguments": "{}"
+        }).insert()
+        frappe.db.commit()
+        
+        # 2. Process telemetry for finished
+        telemetry_payload = json.dumps({
+            "job_id": job.name,
+            "status": "finished",
+            "site": frappe.local.site,
+            "total_tried": 1,
+            "result": {"data": "done"}
+        })
+        messages = [
+            ("fs:finished:low", [("123-0", {b"payload": telemetry_payload.encode('utf-8')})])
+        ]
+        
+        process_telemetry_messages(frappe.cache(), messages)
+        
+        # 3. Assert FS Job is deleted
+        self.assertFalse(frappe.db.exists("FS Job", job.name))
+        
+        # 4. Assert Controller Job Log is created
+        log = frappe.db.get_value("Controller Job Log", {"job": job.name}, ["status", "debug_log"], as_dict=True)
+        self.assertIsNotNone(log)
+        self.assertEqual(log.status, "Complete")
+        self.assertIn("done", log.debug_log)
+
+    def test_job_lifecycle_telemetry(self):
+        from frappe_controller.utils.controller import process_telemetry_messages
+        import json
+        
+        job = frappe.get_doc({
+            "doctype": "FS Job",
+            "job_type": self.job_type.name,
+            "job_name": "dummy_method",
+            "queue": "low",
+            "status": "queued",
+            "arguments": "{}"
+        }).insert()
+        frappe.db.commit()
+        
+        def send_telemetry(status, stream="fs:scheduled:low"):
+            payload = json.dumps({
+                "job_id": job.name,
+                "status": status,
+                "site": frappe.local.site,
+                "total_tried": 1
+            })
+            messages = [(stream, [("123-0", {b"payload": payload.encode('utf-8')})])]
+            process_telemetry_messages(frappe.cache(), messages)
+            
+        # Scheduled
+        send_telemetry("scheduled")
+        self.assertEqual(frappe.db.get_value("FS Job", job.name, "status"), "scheduled")
+        
+        # Started
+        send_telemetry("started", "fs:started:low")
+        self.assertEqual(frappe.db.get_value("FS Job", job.name, "status"), "started")
+        
+        # Deferred
+        send_telemetry("deferred", "fs:deferred:low")
+        self.assertEqual(frappe.db.get_value("FS Job", job.name, "status"), "deferred")
+        
+        # Failed
+        send_telemetry("failed", "fs:failed:low")
+        self.assertFalse(frappe.db.exists("FS Job", job.name))
+        log = frappe.db.get_value("Controller Job Log", {"job": job.name}, ["status"], as_dict=True)
+        self.assertEqual(log.status, "Failed")
