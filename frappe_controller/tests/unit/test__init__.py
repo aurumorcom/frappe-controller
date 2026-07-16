@@ -115,7 +115,7 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         self.mock_original_enqueue.assert_not_called()
         self.mock_controller_enqueue.assert_called_once_with(
             method=method_name,
-            queue="default",
+            queue="low",
             timeout=None,
             is_async=True
         )
