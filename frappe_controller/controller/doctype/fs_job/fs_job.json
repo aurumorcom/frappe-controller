@@ -39,7 +39,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "queued\nstarted\nfinished\nfailed\ncanceled",
+   "options": "queued\nstarted\nfinished\nfailed\ncanceled\nscheduled\ndeferred",
    "read_only": 1
   },
   {
@@ -182,8 +182,16 @@
    "title": "finished"
   },
   {
-   "color": "Orange",
+   "color": "Gray",
    "title": "canceled"
+  },
+  {
+   "color": "Purple",
+   "title": "scheduled"
+  },
+  {
+   "color": "Orange",
+   "title": "deferred"
   }
  ]
 }
