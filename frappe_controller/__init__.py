@@ -51,6 +51,15 @@ def _patched_enqueue(*args, **kwargs):
                 job_kwargs.pop("scheduled_job_type", None)
                 
             queue = args_dict.get("queue")
+            # Map standard Frappe queues to FastStream queues to prevent fallback recursion
+            if queue not in ("low", "medium", "high"):
+                if queue == "short":
+                    queue = "high"
+                elif queue == "long":
+                    queue = "low"
+                else:
+                    queue = "low"  # default
+            
             timeout = args_dict.get("timeout")
             
             return controller_enqueue(

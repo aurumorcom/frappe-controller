@@ -27,11 +27,16 @@ class TestControllerJob(IntegrationTestCase):
 		super().tearDownClass()
 
 	def test_ingestion_push(self):
-		from frappe_controller.utils.background_jobs import enqueue
 		from frappe.utils.redis_wrapper import RedisWrapper
 		
+		controller_events = frappe.get_hooks("controller_events")
+		if not controller_events:
+			frappe.local.app_modules["controller_events"] = {}
+			controller_events = frappe.local.app_modules["controller_events"]
+		controller_events["frappe_controller.utils.test_controller.dummy_job"] = {}
+		
 		with mock.patch.object(RedisWrapper, 'xadd') as mock_xadd:
-			job_promise = enqueue("frappe_controller.utils.test_controller.dummy_job", queue="low", kwarg1="test")
+			job_promise = frappe.enqueue("frappe_controller.utils.test_controller.dummy_job", queue="low", kwarg1="test")
 			job_name = job_promise.job_id
 			
 			self.assertTrue(frappe.db.exists("FS Job", job_name))

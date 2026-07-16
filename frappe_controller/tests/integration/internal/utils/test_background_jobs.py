@@ -38,22 +38,22 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         # Setup dummy types
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_slow_job",
+            "method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_slow_job",
             "create_log": 0
         }).insert()
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_fast_job",
+            "method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_fast_job",
             "create_log": 0
         }).insert()
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_failing_job",
+            "method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_failing_job",
             "create_log": 0
         }).insert()
         frappe.get_doc({
             "doctype": "Controller Job Type",
-            "method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job",
+            "method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job",
             "create_log": 0
         }).insert()
         frappe.db.commit()
@@ -98,7 +98,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
             event = anyio.Event()
             msg = {"payload": json.dumps({
                 "name": f"low_job_{i}",
-                "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_slow_job",
+                "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_slow_job",
                 "arguments": json.dumps({"job_id": i}),
                 "site": frappe.local.site
             })}
@@ -110,7 +110,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         high_event = anyio.Event()
         msg_high = {"payload": json.dumps({
             "name": "high_job_1",
-            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_fast_job",
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_fast_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -150,7 +150,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         event = anyio.Event()
         msg = {"payload": json.dumps({
             "name": "fail_job_1",
-            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_failing_job",
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_failing_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -230,7 +230,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         event = anyio.Event()
         msg = {"payload": json.dumps({
             "name": "telemetry_job_1",
-            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_fast_job",
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_fast_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -259,18 +259,18 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         The Worker Suspension Test
         Proves that SuspendJob exception moves the job to deferred.
         """
-        from frappe_controller.utils.background_jobs import create_app, enqueue
+        from frappe_controller.utils.background_jobs import create_app
         import anyio
         import redis.asyncio as aioredis
         
         app, broker, priority_queue = create_app()
         
         # 1. Create a job record manually to avoid real worker picking it up
-        job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job"})
+        job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job"})
         job = frappe.get_doc({
             "doctype": "FS Job",
             "job_type": job_type_name,
-            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job",
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job",
             "queue": "low",
             "status": "queued",
             "arguments": "{}"
@@ -280,7 +280,7 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
         event = anyio.Event()
         msg = {"payload": json.dumps({
             "name": job.name,
-            "job_name": "frappe_controller.tests.integration.utils.test_background_jobs.dummy_suspending_job",
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job",
             "arguments": "{}",
             "site": frappe.local.site
         })}
@@ -357,7 +357,21 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         frappe.db.delete("FS Match Condition")
         frappe.db.commit()
         frappe.cache().delete_keys("fs:*")
+
         
+        controller_events = frappe.get_hooks("controller_events")
+        if not controller_events:
+            frappe.local.app_modules["controller_events"] = {}
+            controller_events = frappe.local.app_modules["controller_events"]
+            
+        test_methods = [
+            "dummy_step_a", "dummy_step_b", "dummy_step_c", 
+            "dummy_step_fail", "workflow_b", "dummy_limited_job", 
+            "dummy_large_payload"
+        ]
+        for m in test_methods:
+            controller_events[m] = {}
+
         # Create a parent job
         self.parent_job = frappe.get_doc({
             "doctype": "FS Job",
@@ -383,14 +397,13 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_basic_state_replay_sequential(self, mock_wait):
-        from frappe_controller.utils.background_jobs import enqueue
         from frappe_controller.utils.controller import SuspendJob
         
         mock_wait.side_effect = SuspendJob("test_event")
         
         # 1. First call - should enqueue and suspend
         with self.assertRaises(SuspendJob):
-            enqueue("dummy_step_a", arg1="1").result()
+            frappe.enqueue("dummy_step_a", arg1="1").result()
             
         # Verify job was created
         child_job = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
@@ -410,20 +423,19 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         
         # 2. Second call (Replay) - should return result immediately
         frappe.flags.current_job_step = 0
-        result = enqueue("dummy_step_a", arg1="1").result()
+        result = frappe.enqueue("dummy_step_a", arg1="1").result()
         
         self.assertEqual(result, {"result": "A_1"})
         
         # 3. Next step in workflow
         with self.assertRaises(SuspendJob):
-            enqueue("dummy_step_b", arg1="2").result()
+            frappe.enqueue("dummy_step_b", arg1="2").result()
             
         child_job_b = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 1})
         self.assertEqual(child_job_b.job_name, "dummy_step_b")
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_parallel_execution(self, mock_wait):
-        from frappe_controller.utils.background_jobs import enqueue
         from frappe_controller.utils.controller import SuspendJob
         
         mock_wait.side_effect = SuspendJob("test_event")
@@ -435,7 +447,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         ]
         
         def run_parallel():
-            promises = [enqueue(method, **kwargs) for method, kwargs in steps]
+            promises = [frappe.enqueue(method, **kwargs) for method, kwargs in steps]
             return [p.result() for p in promises]
             
         # 1. First call - should enqueue all 3 and suspend on the first one's result()
@@ -490,14 +502,13 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_failure_handling(self, mock_wait):
-        from frappe_controller.utils.background_jobs import enqueue
         from frappe_controller.utils.controller import SuspendJob
         
         mock_wait.side_effect = SuspendJob("test_event")
         
         # 1. First call - should enqueue and suspend
         with self.assertRaises(SuspendJob):
-            enqueue("dummy_step_fail").result()
+            frappe.enqueue("dummy_step_fail").result()
             
         child_job = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
         
@@ -508,22 +519,21 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         # 2. Second call (Replay) - should raise Exception
         frappe.flags.current_job_step = 0
         with self.assertRaises(Exception) as cm:
-            enqueue("dummy_step_fail").result()
+            frappe.enqueue("dummy_step_fail").result()
             
         self.assertIn("failed", str(cm.exception))
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_mixed_execution(self, mock_wait):
-        from frappe_controller.utils.background_jobs import enqueue
         from frappe_controller.utils.controller import SuspendJob
         
         mock_wait.side_effect = SuspendJob("test_event")
         
         def mixed_workflow():
-            res_a = enqueue("dummy_step_a", arg1="1").result()
+            res_a = frappe.enqueue("dummy_step_a", arg1="1").result()
             
-            p_b = enqueue("dummy_step_b", arg1="2")
-            p_c = enqueue("dummy_step_c", arg1="3")
+            p_b = frappe.enqueue("dummy_step_b", arg1="2")
+            p_c = frappe.enqueue("dummy_step_c", arg1="3")
             
             res_bc = [p_b.result(), p_c.result()]
             return res_a, res_bc
@@ -578,14 +588,13 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_nested_workflows(self, mock_wait):
-        from frappe_controller.utils.background_jobs import enqueue
         from frappe_controller.utils.controller import SuspendJob
         
         mock_wait.side_effect = SuspendJob("test_event")
         
         # Workflow A calls Workflow B
         with self.assertRaises(SuspendJob):
-            enqueue("workflow_b").result()
+            frappe.enqueue("workflow_b").result()
             
         child_job_b = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
         self.assertEqual(child_job_b.job_name, "workflow_b")
@@ -603,12 +612,10 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         }).insert()
         
         frappe.flags.current_job_step = 0
-        result = enqueue("workflow_b").result()
+        result = frappe.enqueue("workflow_b").result()
         self.assertEqual(result, {"result": "B_done"})
 
     def test_rate_limiting_and_retries_inheritance(self):
-        from frappe_controller.utils.background_jobs import enqueue
-        
         # Create a job type with specific limits
         job_type = frappe.get_doc({
             "doctype": "Controller Job Type",
@@ -619,7 +626,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         }).insert()
         
         # Enqueue it
-        job_promise = enqueue("dummy_limited_job")
+        job_promise = frappe.enqueue("dummy_limited_job")
         
         # Verify the FS Job inherited the job_type
         job = frappe.get_doc("FS Job", job_promise.job_id)
@@ -705,13 +712,12 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_large_payloads(self, mock_wait):
-        from frappe_controller.utils.background_jobs import enqueue
         from frappe_controller.utils.controller import SuspendJob
         
         mock_wait.side_effect = SuspendJob("test_event")
         
         with self.assertRaises(SuspendJob):
-            enqueue("dummy_large_payload").result()
+            frappe.enqueue("dummy_large_payload").result()
             
         large_data = {"large": "x" * 100000}
         
@@ -728,7 +734,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         }).insert()
         
         frappe.flags.current_job_step = 0
-        result = enqueue("dummy_large_payload").result()
+        result = frappe.enqueue("dummy_large_payload").result()
         
         self.assertEqual(result, large_data)
 
