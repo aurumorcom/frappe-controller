@@ -21,7 +21,8 @@
   "started_at",
   "ended_at",
   "exception_section",
-  "exc_info"
+  "exc_info",
+  "result"
  ],
  "fields": [
   {
@@ -137,6 +138,12 @@
    "options": "FS Job",
    "read_only": 1,
    "hidden": 1
+  },
+  {
+   "fieldname": "result",
+   "fieldtype": "Code",
+   "label": "Result",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
