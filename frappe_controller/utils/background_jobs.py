@@ -92,7 +92,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 
 
 def get_job_result(job_name: str):
-	log = frappe.db.get_value("Controller Job Log", {"job": job_name, "status": "Complete"}, "debug_log")
+	log = frappe.db.get_value("FS Job", job_name, "result")
 	return json.loads(log) if log else None
 
 import asyncio

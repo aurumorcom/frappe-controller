@@ -532,3 +532,89 @@ def dummy_job(**kwargs):
 
 def dummy_sync():
 	pass
+
+
+class TestClearOldJobs(IntegrationTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		frappe.db.delete("Controller Job Type")
+		frappe.db.delete("FS Job")
+		frappe.db.delete("FS Match Condition")
+		cls.job_type = frappe.get_doc({
+			"doctype": "Controller Job Type",
+			"method": "dummy_method",
+			"create_log": 0
+		}).insert()
+		frappe.db.commit()
+
+	@classmethod
+	def tearDownClass(cls):
+		frappe.db.delete("Controller Job Type")
+		frappe.db.delete("FS Job")
+		frappe.db.delete("FS Match Condition")
+		frappe.db.commit()
+		super().tearDownClass()
+
+	def setUp(self):
+		super().setUp()
+		frappe.db.delete("FS Job")
+		frappe.db.delete("FS Match Condition")
+		frappe.db.commit()
+
+	def test_clear_old_jobs(self):
+		from frappe_controller.utils.controller import clear_old_jobs
+
+		# 1. Create a job older than 30 days
+		old_job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": self.job_type.name,
+			"job_name": "dummy_method",
+			"queue": "low",
+			"status": "finished",
+			"arguments": "{}"
+		}).insert()
+
+		# Backdate creation using raw SQL
+		frappe.db.sql("UPDATE `tabFS Job` SET creation = DATE_SUB(NOW(), INTERVAL 31 DAY) WHERE name = %s", old_job.name)
+
+		# Add match condition for old job
+		old_cond = frappe.get_doc({
+			"doctype": "FS Match Condition",
+			"job": old_job.name,
+			"event_key": "some_event",
+			"condition": "1"
+		}).insert()
+
+		# 2. Create a recent job (e.g. 5 days old)
+		recent_job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": self.job_type.name,
+			"job_name": "dummy_method",
+			"queue": "low",
+			"status": "finished",
+			"arguments": "{}"
+		}).insert()
+
+		frappe.db.sql("UPDATE `tabFS Job` SET creation = DATE_SUB(NOW(), INTERVAL 5 DAY) WHERE name = %s", recent_job.name)
+
+		# Add match condition for recent job
+		recent_cond = frappe.get_doc({
+			"doctype": "FS Match Condition",
+			"job": recent_job.name,
+			"event_key": "some_event",
+			"condition": "1"
+		}).insert()
+
+		frappe.db.commit()
+
+		# 3. Execute cleanup
+		clear_old_jobs()
+
+		# 4. Assertions
+		self.assertFalse(frappe.db.exists("FS Job", old_job.name))
+		self.assertFalse(frappe.db.exists("FS Match Condition", old_cond.name))
+
+		self.assertTrue(frappe.db.exists("FS Job", recent_job.name))
+		self.assertTrue(frappe.db.exists("FS Match Condition", recent_cond.name))
+

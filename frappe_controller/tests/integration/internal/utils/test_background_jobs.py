@@ -311,7 +311,6 @@ class TestStateReplayWorkflow(IntegrationTestCase):
     def setUpClass(cls):
         super().setUpClass()
         frappe.db.truncate("FS Job")
-        frappe.db.truncate("Controller Job Log")
         frappe.db.truncate("Controller Job Type")
         frappe.db.truncate("FS Event")
         frappe.db.truncate("FS Match Condition")
@@ -326,7 +325,6 @@ class TestStateReplayWorkflow(IntegrationTestCase):
     def setUp(self):
         super().setUp()
         frappe.db.delete("FS Job")
-        frappe.db.delete("Controller Job Log")
         frappe.db.delete("FS Event")
         frappe.db.delete("FS Match Condition")
         frappe.db.commit()
@@ -347,7 +345,6 @@ class TestStateReplayWorkflow(IntegrationTestCase):
     def tearDownClass(cls):
         frappe.db.delete("Controller Job Type")
         frappe.db.delete("FS Job")
-        frappe.db.delete("Controller Job Log")
         frappe.db.delete("FS Event")
         frappe.db.delete("FS Match Condition")
         frappe.db.commit()
@@ -356,7 +353,6 @@ class TestStateReplayWorkflow(IntegrationTestCase):
     def setUp(self):
         super().setUp()
         frappe.db.delete("FS Job")
-        frappe.db.delete("Controller Job Log")
         frappe.db.delete("FS Event")
         frappe.db.delete("FS Match Condition")
         frappe.db.commit()
@@ -392,7 +388,6 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         frappe.flags.current_job_id = None
         frappe.flags.current_job_step = 0
         frappe.db.delete("FS Job")
-        frappe.db.delete("Controller Job Log")
         frappe.db.delete("FS Event")
         frappe.db.delete("FS Match Condition")
         frappe.db.commit()
@@ -415,15 +410,8 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         # Simulate child job finishing
         child_job.status = "finished"
+        child_job.result = json.dumps({"result": "A_1"})
         child_job.save()
-
-        frappe.get_doc({
-            "doctype": "Controller Job Log",
-            "controller_job_type": self.parent_job.job_type,
-            "job": child_job.name,
-            "status": "Complete",
-            "debug_log": json.dumps({"result": "A_1"})
-        }).insert()
 
         # 2. Second call (Replay) - should return result immediately
         frappe.flags.current_job_step = 0
@@ -468,13 +456,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
             frappe.db.set_value("FS Job", job_info.name, "status", status)
 
             if status == "finished":
-                frappe.get_doc({
-                    "doctype": "Controller Job Log",
-                    "controller_job_type": self.parent_job.job_type,
-                    "job": job_info.name,
-                    "status": "Complete",
-                    "debug_log": json.dumps({"result": f"res_{i}"})
-                }).insert()
+                frappe.db.set_value("FS Job", job_info.name, "result", json.dumps({"result": f"res_{i}"}))
 
             if i == 2:
                 self.pending_job_name = job_info.name
@@ -486,14 +468,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         # Simulate 3rd child job finishing
         frappe.db.set_value("FS Job", self.pending_job_name, "status", "finished")
-
-        frappe.get_doc({
-            "doctype": "Controller Job Log",
-            "controller_job_type": self.parent_job.job_type,
-            "job": self.pending_job_name,
-            "status": "Complete",
-            "debug_log": json.dumps({"result": "res_2"})
-        }).insert()
+        frappe.db.set_value("FS Job", self.pending_job_name, "result", json.dumps({"result": "res_2"}))
 
         # 3. Third call (Replay) - should return all results
         frappe.flags.current_job_step = 0
@@ -551,15 +526,8 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         # Simulate Step A finishing
         child_job_a.status = "finished"
+        child_job_a.result = json.dumps({"result": "A_1"})
         child_job_a.save()
-
-        frappe.get_doc({
-            "doctype": "Controller Job Log",
-            "controller_job_type": self.parent_job.job_type,
-            "job": child_job_a.name,
-            "status": "Complete",
-            "debug_log": json.dumps({"result": "A_1"})
-        }).insert()
 
         # 2. Second call (Replay) - Step A returns, Parallel Steps B & C enqueue
         frappe.flags.current_job_step = 0
@@ -572,14 +540,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         # Simulate Steps B & C finishing
         for i, name in enumerate(["dummy_step_b", "dummy_step_c"], start=1):
             frappe.db.set_value("FS Job", jobs[i].name, "status", "finished")
-
-            frappe.get_doc({
-                "doctype": "Controller Job Log",
-                "controller_job_type": self.parent_job.job_type,
-                "job": jobs[i].name,
-                "status": "Complete",
-                "debug_log": json.dumps({"result": f"res_{i}"})
-            }).insert()
+            frappe.db.set_value("FS Job", jobs[i].name, "result", json.dumps({"result": f"res_{i}"}))
 
         # 3. Third call (Replay) - All return
         frappe.flags.current_job_step = 0
@@ -605,15 +566,8 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         # Simulate Workflow B finishing
         child_job_b.status = "finished"
+        child_job_b.result = json.dumps({"result": "B_done"})
         child_job_b.save()
-
-        frappe.get_doc({
-            "doctype": "Controller Job Log",
-            "controller_job_type": self.parent_job.job_type,
-            "job": child_job_b.name,
-            "status": "Complete",
-            "debug_log": json.dumps({"result": "B_done"})
-        }).insert()
 
         frappe.flags.current_job_step = 0
         result = frappe.enqueue("workflow_b").result()
@@ -700,15 +654,8 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         # But `get_job_result` uses `frappe.db.get_value`, which returns the first one it finds.
         # So it's idempotent from the workflow's perspective.
 
-        # Let's manually create two logs to simulate duplicate telemetry
-        for _ in range(2):
-            frappe.get_doc({
-                "doctype": "Controller Job Log",
-                "controller_job_type": self.parent_job.job_type,
-                "job": child_job.name,
-                "status": "Complete",
-                "debug_log": json.dumps({"data": "ok"})
-            }).insert()
+        # Set the result on child_job to simulate processing telemetry
+        frappe.db.set_value("FS Job", child_job.name, "result", json.dumps({"data": "ok"}))
 
         # Verify get_job_result still works
         from frappe_controller.utils.background_jobs import get_job_result
@@ -728,15 +675,8 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         child_job = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
         child_job.status = "finished"
+        child_job.result = json.dumps(large_data)
         child_job.save()
-
-        frappe.get_doc({
-            "doctype": "Controller Job Log",
-            "controller_job_type": self.parent_job.job_type,
-            "job": child_job.name,
-            "status": "Complete",
-            "debug_log": json.dumps(large_data)
-        }).insert()
 
         frappe.flags.current_job_step = 0
         result = frappe.enqueue("dummy_large_payload").result()
@@ -803,14 +743,11 @@ class TestStatusLifecycle(IntegrationTestCase):
 
         process_telemetry_messages(frappe.cache(), messages)
 
-        # 3. Assert FS Job is deleted
-        self.assertFalse(frappe.db.exists("FS Job", job.name))
-
-        # 4. Assert Controller Job Log is created
-        log = frappe.db.get_value("Controller Job Log", {"job": job.name}, ["status", "debug_log"], as_dict=True)
-        self.assertIsNotNone(log)
-        self.assertEqual(log.status, "Complete")
-        self.assertIn("done", log.debug_log)
+        # 3. Assert FS Job is not deleted and has status 'finished' and correct result
+        self.assertTrue(frappe.db.exists("FS Job", job.name))
+        saved_job = frappe.get_doc("FS Job", job.name)
+        self.assertEqual(saved_job.status, "finished")
+        self.assertIn("done", saved_job.result)
 
     def test_job_lifecycle_telemetry(self):
         import json
@@ -851,6 +788,5 @@ class TestStatusLifecycle(IntegrationTestCase):
 
         # Failed
         send_telemetry("failed", "fs:failed:low")
-        self.assertFalse(frappe.db.exists("FS Job", job.name))
-        log = frappe.db.get_value("Controller Job Log", {"job": job.name}, ["status"], as_dict=True)
-        self.assertEqual(log.status, "Failed")
+        self.assertTrue(frappe.db.exists("FS Job", job.name))
+        self.assertEqual(frappe.db.get_value("FS Job", job.name, "status"), "failed")

@@ -25,6 +25,7 @@ class FSJob(Document):
 		status: DF.Literal["queued", "started", "finished", "failed", "canceled"]
 		time_taken: DF.Duration | None
 		timeout: DF.Duration | None
+		result: DF.Code | None
 
 	# end: auto-generated types
 	@frappe.whitelist()
