@@ -2,9 +2,11 @@
 # License: MIT. See LICENSE
 
 import json
+
 import frappe
 from frappe.model.document import Document
 from frappe.utils import now_datetime
+
 
 class ControllerJobType(Document):
 	# begin: auto-generated types
@@ -29,14 +31,14 @@ class ControllerJobType(Document):
 
 	def on_update(self):
 		import redis
-		
+
 		key = f"fs:{self.method}:config"
 		redis_url = frappe.conf.get("redis_cache") or "redis://localhost:13000"
 		r = redis.Redis.from_url(redis_url)
-		
+
 		# Clear existing config
 		r.delete(key)
-		
+
 		limits = {}
 		if self.rate_limit_per_second:
 			limits["rate_limit_per_second"] = str(self.rate_limit_per_second)
@@ -50,16 +52,16 @@ class ControllerJobType(Document):
 			limits["timeout"] = str(self.timeout)
 		if self.retries:
 			limits["retries"] = str(self.retries)
-			
+
 		if limits:
 			r.hset(key, mapping=limits)
 
 def sync_jobs(hooks: list | dict = None):
 	frappe.reload_doc("controller", "doctype", "controller_job_type")
 	frappe.reload_doc("controller", "doctype", "fs_job")
-	
+
 	raw_hooks = hooks if hooks is not None else frappe.get_hooks("controller_events")
-	
+
 	if not raw_hooks:
 		return
 
@@ -68,7 +70,7 @@ def sync_jobs(hooks: list | dict = None):
 		raw_hooks = [raw_hooks]
 
 	defined_methods = []
-	
+
 	for hook_entry in raw_hooks:
 		if isinstance(hook_entry, str):
 			defined_methods.append(hook_entry)
@@ -118,7 +120,7 @@ def insert_single_event(method: str, config: dict = None):
 
 	config = config or {}
 	job_name = frappe.db.exists("Controller Job Type", {"method": method})
-	
+
 	if job_name:
 		doc = frappe.get_doc("Controller Job Type", job_name)
 	else:
@@ -141,14 +143,14 @@ def insert_single_event(method: str, config: dict = None):
 			doc.rate_limit_per_second = int(rate_limit_per_second)
 		except (ValueError, TypeError):
 			pass
-			
+
 	rate_limit_per_minute = get_val("rate_limit_per_minute")
 	if rate_limit_per_minute is not None:
 		try:
 			doc.rate_limit_per_minute = int(rate_limit_per_minute)
 		except (ValueError, TypeError):
 			pass
-			
+
 	rate_limit_per_hour = get_val("rate_limit_per_hour")
 	if rate_limit_per_hour is not None:
 		try:
@@ -176,5 +178,5 @@ def insert_single_event(method: str, config: dict = None):
 			doc.retries = int(retries)
 		except (ValueError, TypeError):
 			pass
-	
+
 	doc.save(ignore_permissions=True)

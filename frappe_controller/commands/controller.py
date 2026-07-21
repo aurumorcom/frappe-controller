@@ -2,6 +2,7 @@ import click
 import frappe
 import frappe.commands.scheduler
 
+
 @click.command("control")
 def start_controller():
 	"""Start the custom controller process."""
@@ -21,7 +22,7 @@ original_worker_callback = frappe.commands.scheduler.start_worker.callback
 
 def fs_worker_wrapper(**kwargs):
 	namespace = kwargs.pop("namespace", None)
-	
+
 	if namespace == "fs":
 		from frappe_controller.utils.background_jobs import start_worker
 		start_worker()
