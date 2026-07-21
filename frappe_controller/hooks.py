@@ -145,7 +145,7 @@ doc_events = {
 
 scheduler_events = {
 	"daily": [
-		"frappe_controller.utils.controller.clear_old_logs"
+		"frappe_controller.utils.controller.clear_old_jobs"
 	]
 }
 
