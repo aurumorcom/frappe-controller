@@ -528,42 +528,20 @@ def process_telemetry_messages(cache, messages, logger=None):
 				values.append(job_id)
 				frappe.db.sql(sql, tuple(values))
 			else:
+				result_str = json.dumps(result, default=str) if status == "finished" and result is not None else None
 				frappe.db.sql(
 					"""
 					UPDATE `tabFS Job`
-					SET status = %s, exc_info = %s, ended_at = %s, time_taken = %s, total_tried = %s
+					SET status = %s, exc_info = %s, result = %s, ended_at = %s, time_taken = %s, total_tried = %s
 					WHERE name = %s
 				""",
-					(status, error, now_datetime(), time_taken, cint(total_tried), job_id),
+					(status, error, result_str, now_datetime(), time_taken, cint(total_tried), job_id),
 				)
 
 			if status in ("finished", "failed"):
 				job_info = frappe.db.get_value("FS Job", job_id, ["job_type", "parent_job"])
 				job_type_name = job_info[0] if job_info else None
 				parent_job = job_info[1] if job_info else None
-
-				log_created = False
-				if job_type_name and frappe.db.get_value("Controller Job Type", job_type_name, "create_log"):
-					try:
-						log = frappe.new_doc("Controller Job Log")
-						log.controller_job_type = job_type_name
-						log.job = job_id
-						log.status = "Failed" if status == "failed" else "Complete"
-						log.details = (
-							error if error else f"Finished successfully after {total_tried} attempts"
-						)
-						if status == "finished" and result is not None:
-							log.debug_log = json.dumps(result, default=str)
-						elif status == "failed" and error:
-							log.debug_log = error
-						log.set_new_name()
-						log.db_insert()
-						log_created = True
-					except Exception as log_e:
-						logger.warning(f"Could not create Controller Job Log for {job_id}: {log_e}")
-				else:
-					# Consider log creation successful if no log is configured to be created
-					log_created = True
 
 				if parent_job:
 					if status == "finished":
@@ -573,12 +551,10 @@ def process_telemetry_messages(cache, messages, logger=None):
 						frappe.db.set_value("FS Job", parent_job, "exc_info", f"Child job {job_id} failed.")
 						emit_event(f"fs_job_finished:{job_id}")
 
-				if log_created:
-					try:
-						frappe.db.delete("FS Job", job_id)
-						frappe.db.sql("DELETE FROM `tabFS Match Condition` WHERE job = %s", job_id)
-					except Exception as e:
-						logger.warning(f"Could not delete FS Job {job_id}: {e}")
+				try:
+					frappe.db.sql("DELETE FROM `tabFS Match Condition` WHERE job = %s", job_id)
+				except Exception as e:
+					logger.warning(f"Could not delete FS Match Condition for job {job_id}: {e}")
 
 			frappe.db.commit()
 
@@ -591,24 +567,19 @@ def _get_controller_lock_file():
 	return os.path.abspath(os.path.join(get_bench_path(), "config", "controller_process"))
 
 
-def create_job_log(job_type: str, status: str, details: str | None = None):
-	"""Helper function to insert a Controller Job Log"""
-	log = frappe.new_doc("Controller Job Log")
-	log.controller_job_type = job_type
-	log.status = status
-	log.details = details
-	log.insert(ignore_permissions=True)
-
-
-def clear_old_logs():
+def clear_old_jobs():
 	"""
-	Deletes Controller Job Logs that are older than 30 days.
+	Deletes FS Jobs and corresponding Match Conditions that are older than 30 days.
 	"""
 	try:
 		frappe.db.sql("""
-			DELETE FROM `tabController Job Log`
+			DELETE FROM `tabFS Job`
 			WHERE creation < DATE_SUB(NOW(), INTERVAL 30 DAY)
+		""")
+		frappe.db.sql("""
+			DELETE FROM `tabFS Match Condition`
+			WHERE job NOT IN (SELECT name FROM `tabFS Job`)
 		""")
 		frappe.db.commit()
 	except Exception:
-		frappe.logger("controller").error("Failed to clean up old Controller Job Logs", exc_info=True)
+		frappe.logger("controller").error("Failed to clean up old FS Jobs", exc_info=True)
