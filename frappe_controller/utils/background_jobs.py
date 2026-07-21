@@ -2,8 +2,10 @@
 # License: MIT. See LICENSE
 
 import json
+
 import frappe
 from frappe.utils import now_datetime
+
 
 class JobPromise:
 	def __init__(self, job_id):
@@ -11,17 +13,18 @@ class JobPromise:
 
 	def result(self):
 		import frappe
+
 		from frappe_controller.utils.controller import wait_for_event
-		
+
 		job = frappe.db.get_value("FS Job", self.job_id, ["status", "name"], as_dict=True)
 		if not job:
 			raise Exception(f"Job {self.job_id} not found.")
-			
+
 		if job.status == "finished":
 			return get_job_result(self.job_id)
 		elif job.status == "failed":
 			raise Exception(f"Job {self.job_id} failed.")
-			
+
 		# Suspend and wait for this specific job to finish
 		wait_for_event(f"fs_job_finished:{self.job_id}")
 
@@ -31,20 +34,21 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 	Instead of enqueuing directly to Redis, it creates a Controller Job record in MariaDB.
 	Returns a JobPromise object.
 	"""
-	import frappe
 	import json
-	
+
+	import frappe
+
 	if queue not in ("low", "medium", "high"):
 		import frappe.utils.background_jobs as native_bg
 		return native_bg.enqueue(method, queue=queue, timeout=timeout, is_async=is_async, **kwargs)
 
 	parent_job_id = getattr(frappe.flags, "current_job_id", None) if as_child else None
 	current_idx = None
-	
+
 	if parent_job_id:
 		current_idx = getattr(frappe.flags, "current_job_step", 0)
 		frappe.flags.current_job_step = current_idx + 1
-		
+
 		existing_job = frappe.db.get_value("FS Job", {"parent_job": parent_job_id, "idx": current_idx}, "name")
 		if existing_job:
 			return JobPromise(existing_job)
@@ -74,7 +78,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 	job.insert(ignore_permissions=True)
 	job.db_set("job_id", job.name)
 	job.job_id = job.name
-	
+
 	job_payload = job.as_dict()
 	job_payload["site"] = frappe.local.site
 
@@ -93,24 +97,22 @@ def get_job_result(job_name: str):
 
 import asyncio
 import time
-from typing import Dict, Any
+from typing import Any, Dict
 
+import anyio
 import redis.asyncio as aioredis
 from faststream import FastStream
 from faststream.redis import RedisBroker, StreamSub
-import anyio
+
 
 def create_app(redis_url="redis://localhost:13000"):
-    import frappe
-    import redis.asyncio as aioredis
-    from faststream import FastStream
-    from faststream.redis import RedisBroker, StreamSub
     import anyio
-    
+    import frappe
+
     redis_client = aioredis.from_url(redis_url)
     broker = RedisBroker(url=redis_url)
     app = FastStream(broker)
-    
+
     priority_queue = asyncio.PriorityQueue(maxsize=1000)
     queues = ["high", "medium", "low"]
 
@@ -192,33 +194,33 @@ def create_app(redis_url="redis://localhost:13000"):
 
                 if job_data is None:
                     break
-                    
+
                 msg = job_data["msg"]
                 queue_name = job_data["queue_name"]
                 event = job_data["event"]
-                
+
                 try:
                     payload_str = msg.get("payload")
                     if not payload_str:
                         continue
-                        
+
                     if isinstance(payload_str, bytes):
                         payload_str = payload_str.decode()
-                        
+
                     import json
                     try:
                         payload = json.loads(payload_str)
                     except Exception:
                         continue
-                        
+
                     job_id = payload.get("name")
                     if not job_id:
                         continue
-                        
+
                     method_path = payload.get("job_name")
                     args_str = payload.get("arguments")
                     total_tried = int(payload.get("total_tried", 0))
-                    
+
                     site_name = payload.get("site")
                     if not site_name:
                         site_name = frappe.utils.get_sites()[0]
@@ -230,18 +232,18 @@ def create_app(redis_url="redis://localhost:13000"):
                         continue
 
                     await redis_client.expire(lock_key, 60) # Initial 60s
-                    
+
                     # Clear stale promoted flag to avoid skipping future suspensions
                     await redis_client.delete(f"fs:promoted:{job_id}")
-                    
+
                     args = json.loads(args_str) if args_str else {}
-                    
+
                     delay_until = await check_rate_limits(method_path)
-                    
+
                     if delay_until > 0:
                         DELAYED_JOBS_ZSET = f"fs:scheduled:{queue_name}"
                         await redis_client.zadd(DELAYED_JOBS_ZSET, {json.dumps(msg): delay_until})
-                        
+
                         await redis_client.xadd(f"fs:scheduled:{queue_name}", {
                             "payload": json.dumps({
                                 "job_id": job_id,
@@ -250,10 +252,10 @@ def create_app(redis_url="redis://localhost:13000"):
                                 "total_tried": total_tried
                             }, default=str)
                         })
-                        
+
                         await redis_client.delete(lock_key)
                         continue
-                        
+
                     start_time = time.time()
 
                     STARTED_STREAM = f"fs:started:{queue_name}"
@@ -271,14 +273,14 @@ def create_app(redis_url="redis://localhost:13000"):
                         def execute():
                             if getattr(frappe.local, "site", None):
                                 frappe.destroy()
-                                
+
                             frappe.init(site=site_name, force=True)
                             frappe.connect()
-                            
+
                             # Set current job ID for wait_for_event
                             frappe.flags.current_job_id = job_id
                             frappe.flags.current_job_step = 0
-                            
+
                             try:
                                 func = frappe.get_attr(method_path)
                                 result = func(**args)
@@ -289,22 +291,22 @@ def create_app(redis_url="redis://localhost:13000"):
                                 raise
                             finally:
                                 frappe.destroy()
-                        
+
                         return await anyio.to_thread.run_sync(execute)
-                            
+
                     error = None
                     status = "finished"
                     result = None
-                    
+
                     config_key = f"fs:{method_path}:config"
                     job_config = await redis_client.hgetall(config_key)
                     job_config = {k.decode(): v.decode() for k, v in job_config.items()}
-                    
+
                     max_retries = int(job_config.get("retries") or 0)
                     job_timeout = int(job_config.get("timeout") or 3600)
 
                     execution_done = anyio.Event()
-                    
+
                     # Worker Heartbeat Task - uses the pickup lock key
                     async def emit_heartbeat():
                         while not execution_done.is_set():
@@ -313,7 +315,7 @@ def create_app(redis_url="redis://localhost:13000"):
                             except Exception:
                                 pass
                             await asyncio.sleep(5)
-                    
+
                     heartbeat_task = asyncio.create_task(emit_heartbeat())
 
                     try:
@@ -322,24 +324,24 @@ def create_app(redis_url="redis://localhost:13000"):
                             result = await run_frappe()
                     except (Exception, TimeoutError) as e:
                         from frappe_controller.utils.controller import SuspendJob
-                        
+
                         if isinstance(e, SuspendJob):
                             status = "suspended"
                             worker_logger.info(f"Job {job_id} suspended waiting for {e.event_key}")
-                            
+
                             # Race condition fix: Check if orchestrator already promoted this job
                             # while we were in the process of suspending.
                             is_promoted = await redis_client.get(f"fs:promoted:{job_id}")
                             if is_promoted:
                                 worker_logger.info(f"Job {job_id} was already promoted. Re-queuing directly.")
                                 await redis_client.delete(f"fs:promoted:{job_id}")
-                                
+
                                 # Push back to the end of the queue directly
                                 await broker.publish(msg, stream=f"fs:queue:{queue_name}")
                             else:
                                 # Move to deferred with infinite score
                                 await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): 9999999999})
-                            
+
                             # Send telemetry
                             await redis_client.xadd(f"fs:deferred:{queue_name}", {
                                 "payload": json.dumps({
@@ -356,18 +358,18 @@ def create_app(redis_url="redis://localhost:13000"):
                                 error = f"Job timed out after {job_timeout} seconds"
                             else:
                                 error = str(e)
-                            
+
                             worker_logger.error(f"Job {job_id} failed (Attempt {total_tried + 1}): {error}")
-                            
+
                             if total_tried + 1 < max_retries:
                                 new_total_tried = total_tried + 1
-                                backoff = min(30 * (2 ** new_total_tried), 3600) 
-                                
+                                backoff = min(30 * (2 ** new_total_tried), 3600)
+
                                 payload["total_tried"] = new_total_tried
                                 msg["payload"] = json.dumps(payload, default=str)
-                                
+
                                 await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
-                                
+
                                 await redis_client.xadd(f"fs:deferred:{queue_name}", {
                                     "payload": json.dumps({
                                         "job_id": job_id,
@@ -377,12 +379,12 @@ def create_app(redis_url="redis://localhost:13000"):
                                         "error": error
                                     }, default=str)
                                 })
-                                
+
                                 status = "retrying"
                     finally:
                         execution_done.set()
                         heartbeat_task.cancel()
-                        
+
                     time_taken = time.time() - start_time
                     await redis_client.delete(lock_key)
 
@@ -399,11 +401,11 @@ def create_app(redis_url="redis://localhost:13000"):
                                 "total_tried": total_tried + 1
                             }, default=str)
                         })
-                    
+
                     if status == "failed":
                         job_data["status"] = "failed"
                         job_data["error"] = error
-                        
+
                 except Exception as outer_e:
                     worker_logger.error(f"Worker loop error: {traceback.format_exc()}")
                     job_data["status"] = "failed"
@@ -429,7 +431,7 @@ def create_app(redis_url="redis://localhost:13000"):
                                 job_data = json.loads(job_str)
                                 await broker.publish(job_data, stream=f"fs:queue:{q}")
                             await redis_client.zremrangebyscore(scheduled_zset, "-inf", current_time)
-                            
+
                         # 2. Handle Deferred Retries (per-priority)
                         deferred_zset = f"fs:deferred:{q}"
                         jobs_def = await redis_client.zrangebyscore(deferred_zset, "-inf", current_time)
@@ -438,7 +440,7 @@ def create_app(redis_url="redis://localhost:13000"):
                                 job_data = json.loads(job_str)
                                 await broker.publish(job_data, stream=f"fs:queue:{q}")
                             await redis_client.zremrangebyscore(deferred_zset, "-inf", current_time)
-                            
+
                 except Exception:
                     pass
                 await asyncio.sleep(1)
@@ -449,7 +451,7 @@ def create_app(redis_url="redis://localhost:13000"):
     async def shutdown_worker():
         await priority_queue.put((-1, time.time(), None))
 
-    async def ingest_high(msg: Dict[str, Any]):
+    async def ingest_high(msg: dict[str, Any]):
         event = anyio.Event()
         job_data = {"msg": msg, "queue_name": "high", "event": event, "status": "finished", "error": None}
         await priority_queue.put((1, time.time(), job_data))
@@ -457,7 +459,7 @@ def create_app(redis_url="redis://localhost:13000"):
         if job_data["status"] == "failed":
             raise Exception(job_data["error"])
 
-    async def ingest_medium(msg: Dict[str, Any]):
+    async def ingest_medium(msg: dict[str, Any]):
         event = anyio.Event()
         job_data = {"msg": msg, "queue_name": "medium", "event": event, "status": "finished", "error": None}
         await priority_queue.put((2, time.time(), job_data))
@@ -465,7 +467,7 @@ def create_app(redis_url="redis://localhost:13000"):
         if job_data["status"] == "failed":
             raise Exception(job_data["error"])
 
-    async def ingest_low(msg: Dict[str, Any]):
+    async def ingest_low(msg: dict[str, Any]):
         event = anyio.Event()
         job_data = {"msg": msg, "queue_name": "low", "event": event, "status": "finished", "error": None}
         await priority_queue.put((3, time.time(), job_data))
@@ -495,6 +497,5 @@ def start_worker(queue="default"):
             pass
     sync_redis.close()
 
-    import anyio
     app, broker, priority_queue = create_app(redis_url)
     anyio.run(app.run)

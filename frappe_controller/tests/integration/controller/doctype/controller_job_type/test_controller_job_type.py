@@ -3,7 +3,9 @@
 
 import frappe
 from frappe.tests import IntegrationTestCase
+
 from frappe_controller.controller.doctype.controller_job_type.controller_job_type import sync_jobs
+
 
 class TestControllerJobType(IntegrationTestCase):
 	def setUp(self):
@@ -16,7 +18,7 @@ class TestControllerJobType(IntegrationTestCase):
 			"method.one": {"rate_limit_per_minute": 10},
 			"method.two": {"rate_limit_per_hour": 2}
 		}
-		
+
 		sync_jobs(hooks=test_hooks)
 
 		self.assertTrue(frappe.db.exists("Controller Job Type", {"method": "method.one"}))
@@ -27,7 +29,7 @@ class TestControllerJobType(IntegrationTestCase):
 
 		# Test cleanup of orphaned jobs
 		sync_jobs(hooks={"method.one": {}})
-		
+
 		# They are stopped, not deleted
 		job2 = frappe.get_doc("Controller Job Type", {"method": "method.two"})
 		self.assertEqual(job2.stopped, 1)
