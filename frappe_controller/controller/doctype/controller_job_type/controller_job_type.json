@@ -107,8 +107,8 @@
  "in_create": 1,
  "links": [
   {
-   "link_doctype": "Controller Job Log",
-   "link_fieldname": "controller_job_type"
+   "link_doctype": "FS Job",
+   "link_fieldname": "job_type"
   }
  ],
  "modified": "2026-05-06 10:43:00.000000",
