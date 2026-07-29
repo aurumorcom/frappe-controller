@@ -343,7 +343,7 @@ def create_app(redis_url="redis://localhost:13000"):
                                 await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): 9999999999})
 
                             # Send telemetry
-                            await redis_client.xadd(f"fs:deferred:{queue_name}", {
+                            await redis_client.xadd(f"fs:telemetry:deferred:{queue_name}", {
                                 "payload": json.dumps({
                                     "job_id": job_id,
                                     "status": "deferred",
@@ -370,7 +370,7 @@ def create_app(redis_url="redis://localhost:13000"):
 
                                 await redis_client.zadd(f"fs:deferred:{queue_name}", {json.dumps(msg): time.time() + backoff})
 
-                                await redis_client.xadd(f"fs:deferred:{queue_name}", {
+                                await redis_client.xadd(f"fs:telemetry:deferred:{queue_name}", {
                                     "payload": json.dumps({
                                         "job_id": job_id,
                                         "status": "deferred",
