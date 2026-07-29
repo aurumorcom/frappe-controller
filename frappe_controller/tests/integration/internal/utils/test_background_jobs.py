@@ -764,7 +764,7 @@ class TestStatusLifecycle(IntegrationTestCase):
         }).insert()
         frappe.db.commit()
 
-        def send_telemetry(status, stream="fs:scheduled:low"):
+        def send_telemetry(status, stream="fs:telemetry:scheduled:low"):
             payload = json.dumps({
                 "job_id": job.name,
                 "status": status,
@@ -783,7 +783,7 @@ class TestStatusLifecycle(IntegrationTestCase):
         self.assertEqual(frappe.db.get_value("FS Job", job.name, "status"), "started")
 
         # Deferred
-        send_telemetry("deferred", "fs:deferred:low")
+        send_telemetry("deferred", "fs:telemetry:deferred:low")
         self.assertEqual(frappe.db.get_value("FS Job", job.name, "status"), "deferred")
 
         # Failed
