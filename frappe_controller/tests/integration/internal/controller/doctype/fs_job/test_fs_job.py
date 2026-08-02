@@ -601,3 +601,57 @@ class TestFSJobControl(IntegrationTestCase):
 			self.assertFalse(frappe.db.exists("FS Job", job.name))
 		finally:
 			cache.publish = original_publish
+
+	def test_global_frappe_delete_fs_job(self):
+		job = frappe.get_doc(
+			{
+				"doctype": "FS Job",
+				"job_type": self.job_type.name,
+				"job_name": "dummy_method",
+				"queue": "low",
+				"status": "queued",
+				"arguments": "{}",
+			}
+		).insert()
+		frappe.db.commit()
+
+		res = frappe.delete(job.name)
+		self.assertTrue(res)
+		self.assertFalse(frappe.db.exists("FS Job", job.name))
+
+	def test_global_frappe_delete_invalid_or_none(self):
+		self.assertFalse(frappe.delete(None))
+		self.assertFalse(frappe.delete(""))
+		self.assertFalse(frappe.delete("non_existent_job_id"))
+
+	def test_global_frappe_bulk_delete_fs_jobs(self):
+		job1 = frappe.get_doc(
+			{
+				"doctype": "FS Job",
+				"job_type": self.job_type.name,
+				"job_name": "dummy_method",
+				"queue": "low",
+				"status": "failed",
+				"arguments": "{}",
+			}
+		).insert()
+		job2 = frappe.get_doc(
+			{
+				"doctype": "FS Job",
+				"job_type": self.job_type.name,
+				"job_name": "dummy_method",
+				"queue": "low",
+				"status": "finished",
+				"arguments": "{}",
+			}
+		).insert()
+		frappe.db.commit()
+
+		frappe.bulk_delete({"status": "failed"})
+
+		self.assertFalse(frappe.db.exists("FS Job", job1.name))
+		self.assertTrue(frappe.db.exists("FS Job", job2.name))
+
+		frappe.delete_bulk({"status": "finished"})
+		self.assertFalse(frappe.db.exists("FS Job", job2.name))
+
