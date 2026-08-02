@@ -119,7 +119,7 @@ def handle_doc_event(doc, method):
 	# 1. Generic event
 	emit_event(f"doc:{doc.doctype}:{method}", doc.as_dict())
 	# 2. Specific event
-	emit_event(f"doc:{doc.doctype}:{method}:{doc.name}", doc.as_dict())
+	emit_event(f"doc:{doc.doctype}:{doc.name}:{method}", doc.as_dict())
 
 
 def start_controller() -> NoReturn:
