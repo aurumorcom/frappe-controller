@@ -38,7 +38,8 @@ class TestFSJobControl(IntegrationTestCase):
 		super().setUp()
 		frappe.db.delete("FS Job")
 		frappe.db.delete("FS Match Condition")
-		frappe.db.delete("Controller Job Log")
+		if frappe.db.table_exists("Controller Job Log"):
+			frappe.db.delete("Controller Job Log")
 		frappe.db.commit()
 		frappe.cache().delete_keys("fs:*")
 
@@ -174,7 +175,8 @@ class TestFSJobControl(IntegrationTestCase):
 		self.assertTrue(frappe.db.exists("FS Job", job.name))
 		job.reload()
 		self.assertEqual(job.status, "canceled")
-		self.assertFalse(frappe.db.exists("Controller Job Log", {"job": job.name}))
+		if frappe.db.table_exists("Controller Job Log"):
+			self.assertFalse(frappe.db.exists("Controller Job Log", {"job": job.name}))
 
 	def test_started_and_cancelled_race_condition(self):
 		job = frappe.get_doc(

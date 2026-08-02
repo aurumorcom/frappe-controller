@@ -687,9 +687,12 @@ class TestStatusLifecycle(IntegrationTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        frappe.db.truncate("FS Job")
-        frappe.db.truncate("Controller Job Log")
-        frappe.db.truncate("Controller Job Type")
+        if frappe.db.table_exists("FS Job"):
+            frappe.db.truncate("FS Job")
+        if frappe.db.table_exists("Controller Job Log"):
+            frappe.db.truncate("Controller Job Log")
+        if frappe.db.table_exists("Controller Job Type"):
+            frappe.db.truncate("Controller Job Type")
 
         cls.job_type = frappe.get_doc({
             "doctype": "Controller Job Type",
@@ -700,16 +703,20 @@ class TestStatusLifecycle(IntegrationTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        frappe.db.delete("Controller Job Type")
-        frappe.db.delete("FS Job")
-        frappe.db.delete("Controller Job Log")
+        if frappe.db.table_exists("Controller Job Type"):
+            frappe.db.delete("Controller Job Type")
+        if frappe.db.table_exists("FS Job"):
+            frappe.db.delete("FS Job")
+        if frappe.db.table_exists("Controller Job Log"):
+            frappe.db.delete("Controller Job Log")
         frappe.db.commit()
         super().tearDownClass()
 
     def setUp(self):
         super().setUp()
         frappe.db.delete("FS Job")
-        frappe.db.delete("Controller Job Log")
+        if frappe.db.table_exists("Controller Job Log"):
+            frappe.db.delete("Controller Job Log")
         frappe.db.commit()
         frappe.cache().delete_keys("fs:*")
 
