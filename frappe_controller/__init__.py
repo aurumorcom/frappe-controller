@@ -128,5 +128,52 @@ def bulk_cancel(frappe_filter=None):
 		)
 
 
+def delete(job_id):
+	if not job_id:
+		return False
+	if frappe.db.exists("FS Job", job_id):
+		try:
+			frappe.delete_doc("FS Job", job_id, force=True, ignore_permissions=True)
+			return True
+		except Exception as e:
+			frappe.logger("frappe_controller").error(f"Error deleting FS Job {job_id}: {e}")
+			return False
+	else:
+		try:
+			if frappe.db.exists("RQ Job", job_id):
+				frappe.delete_doc("RQ Job", job_id, force=True, ignore_permissions=True)
+				return True
+		except frappe.DoesNotExistError:
+			pass
+		except Exception as e:
+			frappe.logger("frappe_controller").error(f"Error deleting RQ Job {job_id}: {e}")
+			return False
+	return False
+
+
+def bulk_delete(frappe_filter=None):
+	try:
+		fs_jobs = frappe.get_all("FS Job", filters=frappe_filter, fields=["name"])
+		for job in fs_jobs:
+			delete(job.name)
+	except Exception as e:
+		frappe.logger("frappe_controller").warning(
+			f"Failed to bulk delete FS Jobs with filter {frappe_filter}: {e}"
+		)
+
+	try:
+		rq_jobs = frappe.get_all("RQ Job", filters=frappe_filter)
+		for job in rq_jobs:
+			delete(job.name)
+	except Exception as e:
+		frappe.logger("frappe_controller").warning(
+			f"Failed to bulk delete RQ Jobs with filter {frappe_filter}: {e}"
+		)
+
+
 frappe.cancel = cancel
 frappe.bulk_cancel = bulk_cancel
+frappe.cancel_bulk = bulk_cancel
+frappe.delete = delete
+frappe.bulk_delete = bulk_delete
+frappe.delete_bulk = bulk_delete
