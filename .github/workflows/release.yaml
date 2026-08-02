@@ -1,0 +1,14 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    if: "!startsWith(github.event.head_commit.message, 'chore: release')"
+    uses: aurumorinc/.github/.github/workflows/release.yaml@main
+    secrets:
+      RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
