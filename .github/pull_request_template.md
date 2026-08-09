@@ -7,7 +7,7 @@ You MUST strictly adhere to the following rules when filling out this template. 
 3. CONDITIONAL DELETION (SCREENSHOTS): Evaluate the code diff. IF there are NO visual UI/frontend changes, you MUST completely DELETE the entire "## 📸 Screenshots / Recordings" section, including the table. Do not leave the heading.
 4. CONDITIONAL DELETION (BREAKING CHANGES): IF this PR does not introduce breaking changes, you MUST completely DELETE the `<details>` block containing the migration instructions under "## 💥 Breaking Changes".
 5. CONDITIONAL DELETION (TICKETS): IF no ticket numbers are provided in your context, you MUST completely DELETE the entire "## 🔗 Related Tickets & References" section.
-6. CHECKBOX COMPLIANCE: Under "## 🏷️ Type of Change" and "## ✅ Developer Checklist", DO NOT delete the unchecked items. Mark applicable boxes with `[x]` and leave the rest as `[ ]`.
+6. CHECKBOX COMPLIANCE: Under "## 🏷️ Type of Change", DO NOT delete the unchecked items. Mark applicable boxes with `[x]` and leave the rest as `[ ]`.
 7. MARKDOWN RULES: All markdown bullet lists MUST strictly use `-` instead of `*`.
 8. CLEANUP: You MUST delete all inline helper comments starting with an exclamation mark and the entire Example PR `<details>` block at the bottom.
 Output ONLY the final, fully formatted Markdown.
@@ -61,14 +61,6 @@ PR Title MUST follow the Conventional Commits standard:
 ## 🔗 Related Tickets & References
 <!-- Example: Closes #123, Refs: #456 -->
 
-## ✅ Developer Checklist
-- [ ] My PR title strictly follows `<type>[optional scope]: <description>`.
-- [ ] This PR contains a **single responsibility**.
-- [ ] I have performed a self-review of my own code.
-- [ ] I have added/updated tests to cover my changes.
-- [ ] I have updated the documentation accordingly.
-- [ ] All markdown lists in this description strictly use `-` instead of `*`.
-
 <br />
 
 <!-- ⚠️ DELETE the entire example block below before opening the PR! -->
@@ -119,13 +111,5 @@ This PR updates the user search endpoint to support fuzzy matching instead of st
 ## 🔗 Related Tickets & References
 Closes #842
 Refs: #801
-
-## ✅ Developer Checklist
-- [x] My PR title strictly follows `<type>[optional scope]: <description>`.
-- [x] This PR contains a **single responsibility**.
-- [x] I have performed a self-review of my own code.
-- [x] I have added/updated tests to cover my changes.
-- [x] I have updated the documentation accordingly.
-- [x] All markdown lists in this description strictly use `-` instead of `*`.
 
 </details>

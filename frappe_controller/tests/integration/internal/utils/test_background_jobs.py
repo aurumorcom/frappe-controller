@@ -305,6 +305,90 @@ class TestPriorityWorker(IntegrationTestCase, IsolatedAsyncioTestCase):
             deferred_call = next(call for call in mock_zadd.call_args_list if call[0][0] == "fs:deferred:low")
             self.assertIn(9999999999, deferred_call[0][1].values())
 
+    async def test_high_queue_suspended_job_does_not_block_low_queue(self):
+        """
+        Integration Test:
+        Proves that when a high-queue job suspends waiting for an event,
+        the FastStream worker immediately processes pending low-queue jobs.
+        """
+        import anyio
+        import redis.asyncio as aioredis
+        from frappe_controller.utils.background_jobs import create_app
+
+        app, broker, priority_queue = create_app()
+
+        high_event = anyio.Event()
+        low_event = anyio.Event()
+
+        # Job type setup for suspending job
+        job_type_name = frappe.db.get_value(
+            "Controller Job Type",
+            {"method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job"}
+        )
+        high_job = frappe.get_doc({
+            "doctype": "FS Job",
+            "job_type": job_type_name,
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job",
+            "queue": "high",
+            "status": "queued",
+            "arguments": "{}"
+        }).insert()
+
+        low_job_type = frappe.db.get_value(
+            "Controller Job Type",
+            {"method": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_fast_job"}
+        )
+        low_job = frappe.get_doc({
+            "doctype": "FS Job",
+            "job_type": low_job_type,
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_fast_job",
+            "queue": "low",
+            "status": "queued",
+            "arguments": "{}"
+        }).insert()
+        frappe.db.commit()
+
+        high_msg = {"payload": json.dumps({
+            "name": high_job.name,
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_suspending_job",
+            "queue": "high",
+            "site": frappe.local.site,
+            "arguments": "{}"
+        })}
+
+        low_msg = {"payload": json.dumps({
+            "name": low_job.name,
+            "job_name": "frappe_controller.tests.integration.internal.utils.test_background_jobs.dummy_fast_job",
+            "queue": "low",
+            "site": frappe.local.site,
+            "arguments": "{}"
+        })}
+
+        # Put High Job (prio 1) and Low Job (prio 3) into priority_queue
+        await priority_queue.put((1, time.time(), {
+            "msg": high_msg, "queue_name": "high", "event": high_event, "status": "finished", "error": None
+        }))
+        await priority_queue.put((3, time.time(), {
+            "msg": low_msg, "queue_name": "low", "event": low_event, "status": "finished", "error": None
+        }))
+
+        with mock.patch.object(aioredis.Redis, 'zadd', new_callable=mock.AsyncMock) as mock_zadd:
+            worker_task = asyncio.create_task(app._on_startup_calling[0]())
+
+            # Wait for High job to suspend
+            await high_event.wait()
+
+            # Wait for Low job to finish
+            await low_event.wait()
+
+            await priority_queue.put((-1, time.time(), None))
+            await worker_task
+
+            # Assert High job was moved to deferred set
+            self.assertTrue(mock_zadd.called)
+            # Assert Low job completed
+            self.assertTrue(low_event.is_set())
+
 
 class TestStateReplayWorkflow(IntegrationTestCase):
     @classmethod

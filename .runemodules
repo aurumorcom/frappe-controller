@@ -1,0 +1,6 @@
+[runemodule ".agents/skills/hatchet/modules/hatchet"]
+	url = https://github.com/hatchet-dev/hatchet/tree/main
+	path = .agents/skills/hatchet/modules/hatchet
+[runemodule ".agents/skills/trigger-dev/modules/trigger.dev"]
+	url = https://github.com/triggerdotdev/trigger.dev/tree/main
+	path = .agents/skills/trigger-dev/modules/trigger.dev
