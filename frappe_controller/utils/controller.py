@@ -79,6 +79,7 @@ def emit_event(key: str, argument: dict | None = None):
 		}
 	)
 	event.insert(ignore_permissions=True)
+	frappe.db.commit()
 
 	# Notify orchestrator via Redis Stream
 	payload = {"key": key, "event_id": event.name}
