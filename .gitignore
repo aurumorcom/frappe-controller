@@ -51,5 +51,14 @@ jspm_packages/
 # Helix Editor
 .helix/
 
-# Aider AI Chat
+# Aider
 .aider*
+
+# Agent
+plans/
+
+# Rune
+.rune/*
+!.rune/config
+!.rune/index
+.agents/skills/hatchet/modules/hatchet
