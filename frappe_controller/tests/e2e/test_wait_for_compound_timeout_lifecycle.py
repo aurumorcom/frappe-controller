@@ -29,7 +29,7 @@ class TestWaitForCompoundTimeoutLifecycle(IntegrationTestCase):
 		frappe.db.commit()
 
 	def test_e2e_compound_wait_event_arrives_first(self):
-		from frappe_controller.utils.controller import SuspendJob, publish_event, wait_for
+		from frappe_controller.utils.controller import DeferredJob, publish_event, wait_for
 
 		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe_controller.tests.e2e.test_wait_for_compound_timeout_lifecycle.payment_verification_job"})
 		job = frappe.get_doc({

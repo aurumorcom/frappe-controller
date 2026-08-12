@@ -26,7 +26,7 @@ class TestDurableSleepLifecycle(IntegrationTestCase):
 		frappe.db.commit()
 
 	def test_e2e_durable_sleep_for_suspension(self):
-		from frappe_controller.utils.controller import SuspendJob
+		from frappe_controller.utils.controller import DeferredJob
 
 		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe_controller.tests.e2e.test_durable_sleep_lifecycle.drip_campaign_job"})
 		job = frappe.get_doc({
@@ -40,7 +40,7 @@ class TestDurableSleepLifecycle(IntegrationTestCase):
 		frappe.flags.current_job_id = job.name
 
 		# Job calls frappe.sleep_for(seconds=2)
-		with self.assertRaises(SuspendJob):
+		with self.assertRaises(DeferredJob):
 			frappe.sleep_for(seconds=2)
 
 		cond_fields = ["name", "job"]
