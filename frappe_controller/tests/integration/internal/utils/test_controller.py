@@ -618,3 +618,166 @@ class TestClearOldJobs(IntegrationTestCase):
 		self.assertTrue(frappe.db.exists("FS Job", recent_job.name))
 		self.assertTrue(frappe.db.exists("FS Match Condition", recent_cond.name))
 
+
+class TestWaitForUniversal(IntegrationTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		frappe.db.delete("FS Job")
+		frappe.db.delete("Controller Job Type")
+		frappe.db.delete("FS Event")
+		frappe.db.delete("FS Match Condition")
+
+		frappe.get_doc({
+			"doctype": "Controller Job Type",
+			"method": "frappe.ping",
+			"create_log": 0
+		}).insert()
+		frappe.db.commit()
+
+	def setUp(self):
+		super().setUp()
+		frappe.db.delete("FS Job")
+		frappe.db.delete("FS Event")
+		frappe.db.delete("FS Match Condition")
+		frappe.db.commit()
+
+	def test_wait_for_no_args_throws(self):
+		from frappe_controller.utils.controller import wait_for
+		frappe.flags.current_job_id = "DUMMY-JOB"
+		with self.assertRaises(frappe.ValidationError):
+			wait_for()
+
+	def test_wait_for_without_job_context_throws(self):
+		from frappe_controller.utils.controller import wait_for
+		frappe.flags.current_job_id = None
+		with self.assertRaises(Exception):
+			wait_for(event_key="some_event")
+
+	def test_wait_for_event_only_delegation(self):
+		from frappe_controller.utils.controller import publish_event, wait_for
+
+		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type_name,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert()
+		frappe.flags.current_job_id = job.name
+
+		publish_event("uni_event", {"status": "ok"})
+		res = wait_for(event_key="uni_event")
+		self.assertEqual(res.get("status"), "ok")
+
+	def test_wait_for_duration_sleep(self):
+		from frappe_controller.utils.controller import SuspendJob, wait_for
+
+		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type_name,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert()
+		frappe.flags.current_job_id = job.name
+
+		with self.assertRaises(SuspendJob):
+			wait_for(seconds=10)
+
+		cond_fields = ["name", "job"]
+		if frappe.db.has_column("FS Match Condition", "condition_type"):
+			cond_fields.append("condition_type")
+
+		cond = frappe.get_all("FS Match Condition", filters={"job": job.name}, fields=cond_fields)
+		self.assertEqual(len(cond), 1)
+
+	def test_wait_for_compound_event_or_timeout(self):
+		from frappe_controller.utils.controller import SuspendJob, wait_for
+
+		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type_name,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert()
+		frappe.flags.current_job_id = job.name
+
+		with self.assertRaises(SuspendJob):
+			wait_for(event_key="compound_evt", hours=1)
+
+		cond_fields = ["name", "job", "event_key"]
+		if frappe.db.has_column("FS Match Condition", "condition_type"):
+			cond_fields.append("condition_type")
+
+		cond = frappe.get_all("FS Match Condition", filters={"job": job.name}, fields=cond_fields)
+		self.assertEqual(len(cond), 1)
+		self.assertEqual(cond[0].event_key, "compound_evt")
+
+
+class TestDocEventEmission(IntegrationTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		frappe.db.delete("FS Match Condition")
+		frappe.db.delete("FS Event")
+		frappe.db.commit()
+
+	def setUp(self):
+		super().setUp()
+		frappe.db.delete("FS Match Condition")
+		frappe.db.delete("FS Event")
+		frappe.db.commit()
+
+	def test_doc_event_short_circuits_without_active_waiters(self):
+		from frappe_controller.utils.controller import handle_doc_event
+
+		doc = frappe._dict({"doctype": "Customer", "name": "CUST-001", "as_dict": lambda: {"name": "CUST-001"}})
+		handle_doc_event(doc, "on_update")
+
+		events = frappe.get_all("FS Event", filters={"key": "doc:Customer:on_update"})
+		self.assertEqual(len(events), 0)
+
+	def test_doc_event_emits_when_active_waiter_exists(self):
+		from frappe_controller.utils.controller import handle_doc_event
+
+		job_type = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
+		if not job_type:
+			job_type = frappe.get_doc({
+				"doctype": "Controller Job Type",
+				"method": "frappe.ping",
+				"create_log": 0
+			}).insert(ignore_permissions=True).name
+
+		job = frappe.get_doc({
+			"doctype": "FS Job",
+			"job_type": job_type,
+			"job_name": "frappe.ping",
+			"queue": "low",
+			"status": "queued",
+			"arguments": "{}"
+		}).insert(ignore_permissions=True)
+
+		frappe.get_doc({
+			"doctype": "FS Match Condition",
+			"job": job.name,
+			"event_key": "on_update",
+			"filters": '{"doctype": "Customer"}',
+			"is_satisfied": 0
+		}).insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		doc = frappe._dict({"doctype": "Customer", "name": "CUST-001", "as_dict": lambda: {"name": "CUST-001"}})
+		handle_doc_event(doc, "on_update")
+
+		events = frappe.get_all("FS Event", filters={"key": "on_update"})
+		self.assertEqual(len(events), 1)
+
+
