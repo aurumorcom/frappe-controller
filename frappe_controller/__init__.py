@@ -178,12 +178,14 @@ frappe.delete = delete
 frappe.bulk_delete = bulk_delete
 frappe.delete_bulk = bulk_delete
 
+from frappe_controller.utils.background_jobs import JobPromise, JobResult
 from frappe_controller.utils.controller import (
-	wait_for,
-	wait_for_event,
+	SuspendJob,
+	publish_event,
 	sleep_for,
 	sleep_until,
-	publish_event,
+	wait_for,
+	wait_for_event,
 )
 
 frappe.wait_for = wait_for
@@ -191,4 +193,7 @@ frappe.wait_for_event = wait_for_event
 frappe.sleep_for = sleep_for
 frappe.sleep_until = sleep_until
 frappe.publish_event = publish_event
-frappe.emit_event = publish_event
+
+frappe.JobPromise = JobPromise
+frappe.SuspendJob = SuspendJob
+frappe.JobResult = JobResult
