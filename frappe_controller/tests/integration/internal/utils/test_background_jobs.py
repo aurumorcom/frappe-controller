@@ -480,12 +480,12 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_basic_state_replay_sequential(self, mock_wait):
-        from frappe_controller.utils.controller import SuspendJob
+        from frappe_controller.utils.controller import DeferredJob
 
-        mock_wait.side_effect = SuspendJob("test_event")
+        mock_wait.side_effect = DeferredJob("test_event")
 
         # 1. First call - should enqueue and suspend
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             frappe.enqueue("dummy_step_a", arg1="1").result()
 
         # Verify job was created
@@ -504,7 +504,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         self.assertEqual(result.result if hasattr(result, "result") else result, {"result": "A_1"})
 
         # 3. Next step in workflow
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             frappe.enqueue("dummy_step_b", arg1="2").result()
 
         child_job_b = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 1})
@@ -512,9 +512,9 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_parallel_execution(self, mock_wait):
-        from frappe_controller.utils.controller import SuspendJob
+        from frappe_controller.utils.controller import DeferredJob
 
-        mock_wait.side_effect = SuspendJob("test_event")
+        mock_wait.side_effect = DeferredJob("test_event")
 
         steps = [
             ("dummy_step_a", {"arg1": "1"}),
@@ -527,7 +527,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
             return [p.result() for p in promises]
 
         # 1. First call - should enqueue all 3 and suspend on the first one's result()
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             run_parallel()
 
         # Verify 3 jobs created
@@ -547,7 +547,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         # 2. Second call (Replay) - should suspend again because 3rd is not finished
         frappe.flags.current_job_step = 0
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             run_parallel()
 
         # Simulate 3rd child job finishing
@@ -565,12 +565,12 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_failure_handling(self, mock_wait):
-        from frappe_controller.utils.controller import SuspendJob
+        from frappe_controller.utils.controller import DeferredJob
 
-        mock_wait.side_effect = SuspendJob("test_event")
+        mock_wait.side_effect = DeferredJob("test_event")
 
         # 1. First call - should enqueue and suspend
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             frappe.enqueue("dummy_step_fail").result()
 
         child_job = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
@@ -588,9 +588,9 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_mixed_execution(self, mock_wait):
-        from frappe_controller.utils.controller import SuspendJob
+        from frappe_controller.utils.controller import DeferredJob
 
-        mock_wait.side_effect = SuspendJob("test_event")
+        mock_wait.side_effect = DeferredJob("test_event")
 
         def mixed_workflow():
             res_a = frappe.enqueue("dummy_step_a", arg1="1").result()
@@ -602,7 +602,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
             return res_a, res_bc
 
         # 1. First call - Sequential Step A
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             mixed_workflow()
 
         child_job_a = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
@@ -615,7 +615,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         # 2. Second call (Replay) - Step A returns, Parallel Steps B & C enqueue
         frappe.flags.current_job_step = 0
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             mixed_workflow()
 
         jobs = frappe.get_all("FS Job", filters={"parent_job": self.parent_job.name}, order_by="idx asc")
@@ -637,12 +637,12 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_nested_workflows(self, mock_wait):
-        from frappe_controller.utils.controller import SuspendJob
+        from frappe_controller.utils.controller import DeferredJob
 
-        mock_wait.side_effect = SuspendJob("test_event")
+        mock_wait.side_effect = DeferredJob("test_event")
 
         # Workflow A calls Workflow B
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             frappe.enqueue("workflow_b").result()
 
         child_job_b = frappe.get_doc("FS Job", {"parent_job": self.parent_job.name, "idx": 0})
@@ -748,11 +748,11 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_large_payloads(self, mock_wait):
-        from frappe_controller.utils.controller import SuspendJob
+        from frappe_controller.utils.controller import DeferredJob
 
-        mock_wait.side_effect = SuspendJob("test_event")
+        mock_wait.side_effect = DeferredJob("test_event")
 
-        with self.assertRaises(SuspendJob):
+        with self.assertRaises(DeferredJob):
             frappe.enqueue("dummy_large_payload").result()
 
         large_data = {"large": "x" * 100000}
