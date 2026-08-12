@@ -14,7 +14,7 @@ class JobPromise:
 	def result(self):
 		import frappe
 
-		from frappe_controller.utils.controller import wait_for_event
+		from frappe_controller.utils.controller import JobResult, wait_for_event
 
 		job = frappe.db.get_value("FS Job", self.job_id, ["status", "name"], as_dict=True)
 		if not job:
@@ -23,10 +23,12 @@ class JobPromise:
 		if job.status == "finished":
 			return get_job_result(self.job_id)
 		elif job.status == "failed":
-			raise Exception(f"Job {self.job_id} failed.")
+			res = get_job_result(self.job_id)
+			raise Exception(f"Job {self.job_id} failed: {res.exc_info if res else ''}")
 
 		# Suspend and wait for this specific job to finish
 		wait_for_event(f"fs_job_finished:{self.job_id}")
+		return get_job_result(self.job_id)
 
 def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **kwargs):
 	"""
@@ -92,8 +94,30 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 
 
 def get_job_result(job_name: str):
-	log = frappe.db.get_value("FS Job", job_name, "result")
-	return json.loads(log) if log else None
+	from frappe_controller.utils.controller import JobResult
+
+	job = frappe.db.get_value(
+		"FS Job",
+		job_name,
+		["status", "result", "exc_info", "time_taken", "started_at", "ended_at"],
+		as_dict=True,
+	)
+	if not job:
+		return None
+
+	parsed_result = json.loads(job.result) if job.result else None
+	if isinstance(parsed_result, dict) and "status" in parsed_result:
+		return JobResult(job_id=job_name, **parsed_result)
+
+	return JobResult(
+		job_id=job_name,
+		status=job.status,
+		result=parsed_result,
+		exc_info=job.exc_info,
+		time_taken=frappe.utils.flt(job.time_taken),
+		started_at=job.started_at,
+		ended_at=job.ended_at,
+	)
 
 import asyncio
 import time
