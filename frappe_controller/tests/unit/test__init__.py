@@ -30,8 +30,10 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         self.assertTrue(hasattr(frappe, "sleep_for"))
         self.assertTrue(hasattr(frappe, "sleep_until"))
         self.assertTrue(hasattr(frappe, "publish_event"))
-        self.assertTrue(hasattr(frappe, "emit_event"))
-        self.assertEqual(frappe.publish_event, frappe.emit_event)
+        self.assertFalse(hasattr(frappe, "emit_event"))
+        self.assertTrue(hasattr(frappe, "JobPromise"))
+        self.assertTrue(hasattr(frappe, "SuspendJob"))
+        self.assertTrue(hasattr(frappe, "JobResult"))
 
     def test_standard_rq_job(self):
         self.mock_get_hooks.return_value = {}
