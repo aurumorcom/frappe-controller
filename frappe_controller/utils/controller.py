@@ -310,7 +310,7 @@ def sleep_until(date: Any, as_string=False, as_datetime=False) -> None:
 	match_condition.insert(ignore_permissions=True)
 	frappe.db.commit()
 
-	raise SuspendJob(f"sleep_until:{get_datetime_str(target_dt)}", target_timestamp=target_dt)
+	raise DeferredJob(f"sleep_until:{get_datetime_str(target_dt)}", target_timestamp=target_dt)
 
 
 def sleep_for(
