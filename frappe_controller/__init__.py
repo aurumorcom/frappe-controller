@@ -177,3 +177,18 @@ frappe.cancel_bulk = bulk_cancel
 frappe.delete = delete
 frappe.bulk_delete = bulk_delete
 frappe.delete_bulk = bulk_delete
+
+from frappe_controller.utils.controller import (
+	wait_for,
+	wait_for_event,
+	sleep_for,
+	sleep_until,
+	publish_event,
+)
+
+frappe.wait_for = wait_for
+frappe.wait_for_event = wait_for_event
+frappe.sleep_for = sleep_for
+frappe.sleep_until = sleep_until
+frappe.publish_event = publish_event
+frappe.emit_event = publish_event

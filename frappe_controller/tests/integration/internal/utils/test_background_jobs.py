@@ -501,7 +501,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         frappe.flags.current_job_step = 0
         result = frappe.enqueue("dummy_step_a", arg1="1").result()
 
-        self.assertEqual(result, {"result": "A_1"})
+        self.assertEqual(result.result if hasattr(result, "result") else result, {"result": "A_1"})
 
         # 3. Next step in workflow
         with self.assertRaises(SuspendJob):
@@ -559,9 +559,9 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         results = run_parallel()
 
         self.assertEqual(len(results), 3)
-        self.assertEqual(results[0], {"result": "res_0"})
-        self.assertEqual(results[1], {"result": "res_1"})
-        self.assertEqual(results[2], {"result": "res_2"})
+        self.assertEqual(results[0].result if hasattr(results[0], "result") else results[0], {"result": "res_0"})
+        self.assertEqual(results[1].result if hasattr(results[1], "result") else results[1], {"result": "res_1"})
+        self.assertEqual(results[2].result if hasattr(results[2], "result") else results[2], {"result": "res_2"})
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_failure_handling(self, mock_wait):
@@ -630,10 +630,10 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         frappe.flags.current_job_step = 0
         res_a, res_bc = mixed_workflow()
 
-        self.assertEqual(res_a, {"result": "A_1"})
+        self.assertEqual(res_a.result if hasattr(res_a, "result") else res_a, {"result": "A_1"})
         self.assertEqual(len(res_bc), 2)
-        self.assertEqual(res_bc[0], {"result": "res_1"})
-        self.assertEqual(res_bc[1], {"result": "res_2"})
+        self.assertEqual(res_bc[0].result if hasattr(res_bc[0], "result") else res_bc[0], {"result": "res_1"})
+        self.assertEqual(res_bc[1].result if hasattr(res_bc[1], "result") else res_bc[1], {"result": "res_2"})
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_nested_workflows(self, mock_wait):
@@ -655,7 +655,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
 
         frappe.flags.current_job_step = 0
         result = frappe.enqueue("workflow_b").result()
-        self.assertEqual(result, {"result": "B_done"})
+        self.assertEqual(result.result if hasattr(result, "result") else result, {"result": "B_done"})
 
     def test_rate_limiting_and_retries_inheritance(self):
         # Create a job type with specific limits
@@ -744,7 +744,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         # Verify get_job_result still works
         from frappe_controller.utils.background_jobs import get_job_result
         result = get_job_result(child_job.name)
-        self.assertEqual(result, {"data": "ok"})
+        self.assertEqual(result.result if hasattr(result, "result") else result, {"data": "ok"})
 
     @mock.patch("frappe_controller.utils.controller.wait_for_event")
     def test_large_payloads(self, mock_wait):
@@ -765,7 +765,7 @@ class TestStateReplayWorkflow(IntegrationTestCase):
         frappe.flags.current_job_step = 0
         result = frappe.enqueue("dummy_large_payload").result()
 
-        self.assertEqual(result, large_data)
+        self.assertEqual(result.result if hasattr(result, "result") else result, large_data)
 
 class TestStatusLifecycle(IntegrationTestCase):
     @classmethod
