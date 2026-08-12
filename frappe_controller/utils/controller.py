@@ -63,14 +63,14 @@ class JobResult(frappe._dict):
 		return cls(job_id=job_id, status="failed", result=None, exc_info=err_str, **kwargs)
 
 
-class SuspendJob(Exception):
-	"""Exception raised to suspend a job and free up the worker slot."""
+class DeferredJob(Exception):
+	"""Exception raised to defer a job and free up the worker slot."""
 
 	def __init__(self, event_key, payload=None, target_timestamp=None):
 		self.event_key = event_key
 		self.payload = payload
 		self.target_timestamp = target_timestamp
-		super().__init__(f"Job suspended waiting for event: {event_key}")
+		super().__init__(f"Job deferred waiting for event: {event_key}")
 
 
 def evaluate_frappe_filters(data: dict, filters: dict | list | tuple | None) -> bool:
@@ -281,7 +281,7 @@ def wait_for_event(
 		frappe.db.commit()
 		return past_event_toctou
 
-	raise SuspendJob(event_key)
+	raise DeferredJob(event_key)
 
 
 def sleep_until(date: Any, as_string=False, as_datetime=False) -> None:
