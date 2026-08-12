@@ -347,9 +347,9 @@ def create_app(redis_url="redis://localhost:13000"):
                         with anyio.fail_after(job_timeout):
                             result = await run_frappe()
                     except (Exception, TimeoutError) as e:
-                        from frappe_controller.utils.controller import SuspendJob
+                        from frappe_controller.utils.controller import DeferredJob
 
-                        if isinstance(e, SuspendJob):
+                        if isinstance(e, DeferredJob):
                             status = "suspended"
                             worker_logger.info(f"Job {job_id} suspended waiting for {e.event_key}")
 
