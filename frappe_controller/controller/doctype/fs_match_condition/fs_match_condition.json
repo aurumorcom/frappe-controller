@@ -9,6 +9,11 @@
   "job",
   "event_key",
   "condition",
+  "filters",
+  "condition_type",
+  "target_timestamp",
+  "group_id",
+  "logical_operator",
   "consider_events_since",
   "is_satisfied"
  ],
@@ -26,13 +31,43 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Event Key",
-   "reqd": 1,
    "search_index": 1
   },
   {
    "fieldname": "condition",
    "fieldtype": "Small Text",
    "label": "Condition"
+  },
+  {
+   "fieldname": "filters",
+   "fieldtype": "Small Text",
+   "label": "Filters"
+  },
+  {
+   "default": "event",
+   "fieldname": "condition_type",
+   "fieldtype": "Select",
+   "label": "Condition Type",
+   "options": "event\nsleep\njob\nevent_or_timeout"
+  },
+  {
+   "fieldname": "target_timestamp",
+   "fieldtype": "Datetime",
+   "label": "Target Timestamp",
+   "search_index": 1
+  },
+  {
+   "fieldname": "group_id",
+   "fieldtype": "Data",
+   "label": "Group ID",
+   "search_index": 1
+  },
+  {
+   "default": "AND",
+   "fieldname": "logical_operator",
+   "fieldtype": "Select",
+   "label": "Logical Operator",
+   "options": "AND\nOR"
   },
   {
    "fieldname": "consider_events_since",
