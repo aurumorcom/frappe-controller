@@ -9,15 +9,12 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
     def setUp(self):
         super().setUp()
 
-        # We want to mock get_hooks, but frappe.get_hooks might be used internally,
-        # so we patch it safely.
         self.patcher_get_hooks = patch("frappe.get_hooks")
         self.mock_get_hooks = self.patcher_get_hooks.start()
 
         self.patcher_controller_enqueue = patch("frappe_controller.utils.background_jobs.enqueue")
         self.mock_controller_enqueue = self.patcher_controller_enqueue.start()
 
-        # We also mock _original_enqueue to ensure RQ is not called when it shouldn't be
         self.patcher_original_enqueue = patch("frappe_controller._original_enqueue")
         self.mock_original_enqueue = self.patcher_original_enqueue.start()
 
@@ -27,22 +24,27 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         self.patcher_original_enqueue.stop()
         super().tearDown()
 
+    def test_frappe_wait_and_event_patches_attached(self):
+        self.assertTrue(hasattr(frappe, "wait_for"))
+        self.assertTrue(hasattr(frappe, "wait_for_event"))
+        self.assertTrue(hasattr(frappe, "sleep_for"))
+        self.assertTrue(hasattr(frappe, "sleep_until"))
+        self.assertTrue(hasattr(frappe, "publish_event"))
+        self.assertTrue(hasattr(frappe, "emit_event"))
+        self.assertEqual(frappe.publish_event, frappe.emit_event)
+
     def test_standard_rq_job(self):
-        # Scenario 1: Standard RQ Job (No Interception)
         self.mock_get_hooks.return_value = {}
 
-        # Call the patched enqueue directly or via frappe.enqueue (which is patched)
         frappe.enqueue("frappe.utils.background_jobs.test_job")
 
         self.mock_controller_enqueue.assert_not_called()
         self.mock_original_enqueue.assert_called_once()
 
-        # Check args
         args, kwargs = self.mock_original_enqueue.call_args
         self.assertEqual(args[0], "frappe.utils.background_jobs.test_job")
 
     def test_explicit_fs_job_routing(self):
-        # Scenario 2: Explicit FS Job Routing
         self.mock_get_hooks.return_value = {"my_app.jobs.do_work": {}}
         self.mock_controller_enqueue.return_value = "JobPromise"
 
@@ -58,7 +60,6 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         )
 
     def test_scheduler_event_interception(self):
-        # Scenario 3: Scheduler Event Interception & Strict Precedence
         self.mock_get_hooks.return_value = {"my_app.jobs.do_scheduled_work": {}}
         self.mock_controller_enqueue.return_value = "JobPromise"
 
@@ -78,7 +79,6 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         self.assertNotIn("scheduled_job_type", kwargs)
 
     def test_exception_fallback(self):
-        # Scenario 4: Exception Fallback (Graceful Degradation)
         self.mock_get_hooks.return_value = {"my_app.jobs.do_work": {}}
         self.mock_controller_enqueue.side_effect = Exception("DB Error")
         self.mock_original_enqueue.return_value = "RQJob"
@@ -90,20 +90,14 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         self.mock_original_enqueue.assert_called_once()
 
     def test_synchronous_execution_preservation(self):
-        # Scenario 5: Synchronous Execution Preservation
         self.mock_get_hooks.return_value = {"my_app.jobs.do_work": {}}
 
-        # When now=True, our patch detects it and returns _original_enqueue immediately
         frappe.enqueue("my_app.jobs.do_work", now=True)
 
         self.mock_controller_enqueue.assert_not_called()
         self.mock_original_enqueue.assert_called_once()
 
-        # Alternatively, if is_async=False and not frappe.in_test, but we are in test...
-        # so let's stick to now=True
-
     def test_callable_signature_handling(self):
-        # Scenario 6: Callable Signature Handling
         def my_func():
             pass
 
@@ -121,4 +115,3 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
             timeout=None,
             is_async=True
         )
-
