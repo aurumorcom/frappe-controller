@@ -30,8 +30,12 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
         self.assertTrue(hasattr(frappe, "sleep_for"))
         self.assertTrue(hasattr(frappe, "sleep_until"))
         self.assertTrue(hasattr(frappe, "publish_event"))
-        self.assertTrue(hasattr(frappe, "emit_event"))
-        self.assertEqual(frappe.publish_event, frappe.emit_event)
+        self.assertFalse(hasattr(frappe, "emit_event"))
+        self.assertTrue(hasattr(frappe, "Job"))
+        self.assertTrue(hasattr(frappe, "DeferredJob"))
+        self.assertTrue(hasattr(frappe, "JobResult"))
+        self.assertFalse(hasattr(frappe, "JobPromise"))
+        self.assertFalse(hasattr(frappe, "SuspendJob"))
 
     def test_standard_rq_job(self):
         self.mock_get_hooks.return_value = {}
@@ -46,11 +50,11 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
 
     def test_explicit_fs_job_routing(self):
         self.mock_get_hooks.return_value = {"my_app.jobs.do_work": {}}
-        self.mock_controller_enqueue.return_value = "JobPromise"
+        self.mock_controller_enqueue.return_value = "Job"
 
         result = frappe.enqueue("my_app.jobs.do_work", queue="high")
 
-        self.assertEqual(result, "JobPromise")
+        self.assertEqual(result, "Job")
         self.mock_original_enqueue.assert_not_called()
         self.mock_controller_enqueue.assert_called_once_with(
             method="my_app.jobs.do_work",
@@ -61,7 +65,7 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
 
     def test_scheduler_event_interception(self):
         self.mock_get_hooks.return_value = {"my_app.jobs.do_scheduled_work": {}}
-        self.mock_controller_enqueue.return_value = "JobPromise"
+        self.mock_controller_enqueue.return_value = "Job"
 
         result = frappe.enqueue(
             "frappe.core.doctype.scheduled_job_type.scheduled_job_type.run_scheduled_job",
@@ -69,7 +73,7 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
             scheduled_job_type="My App Scheduled Work"
         )
 
-        self.assertEqual(result, "JobPromise")
+        self.assertEqual(result, "Job")
         self.mock_original_enqueue.assert_not_called()
 
         self.mock_controller_enqueue.assert_called_once()
@@ -103,11 +107,11 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
 
         method_name = f"{my_func.__module__}.{my_func.__qualname__}"
         self.mock_get_hooks.return_value = {method_name: {}}
-        self.mock_controller_enqueue.return_value = "JobPromise"
+        self.mock_controller_enqueue.return_value = "Job"
 
         result = frappe.enqueue(my_func, queue="default")
 
-        self.assertEqual(result, "JobPromise")
+        self.assertEqual(result, "Job")
         self.mock_original_enqueue.assert_not_called()
         self.mock_controller_enqueue.assert_called_once_with(
             method=method_name,

@@ -41,7 +41,12 @@ class TestFrappeNamespaceExtensionIntegration(IntegrationTestCase):
 		self.assertTrue(hasattr(frappe, "sleep_for"))
 		self.assertTrue(hasattr(frappe, "sleep_until"))
 		self.assertTrue(hasattr(frappe, "publish_event"))
-		self.assertTrue(hasattr(frappe, "emit_event"))
+		self.assertFalse(hasattr(frappe, "emit_event"))
+		self.assertTrue(hasattr(frappe, "Job"))
+		self.assertTrue(hasattr(frappe, "DeferredJob"))
+		self.assertTrue(hasattr(frappe, "JobResult"))
+		self.assertFalse(hasattr(frappe, "JobPromise"))
+		self.assertFalse(hasattr(frappe, "SuspendJob"))
 
 	def test_frappe_publish_event_creates_record_and_redis(self):
 		frappe.cache().delete("fs:events")

@@ -63,14 +63,14 @@ class JobResult(frappe._dict):
 		return cls(job_id=job_id, status="failed", result=None, exc_info=err_str, **kwargs)
 
 
-class SuspendJob(Exception):
-	"""Exception raised to suspend a job and free up the worker slot."""
+class DeferredJob(Exception):
+	"""Exception raised to defer a job and free up the worker slot."""
 
 	def __init__(self, event_key, payload=None, target_timestamp=None):
 		self.event_key = event_key
 		self.payload = payload
 		self.target_timestamp = target_timestamp
-		super().__init__(f"Job suspended waiting for event: {event_key}")
+		super().__init__(f"Job deferred waiting for event: {event_key}")
 
 
 def evaluate_frappe_filters(data: dict, filters: dict | list | tuple | None) -> bool:
@@ -281,7 +281,7 @@ def wait_for_event(
 		frappe.db.commit()
 		return past_event_toctou
 
-	raise SuspendJob(event_key)
+	raise DeferredJob(event_key)
 
 
 def sleep_until(date: Any, as_string=False, as_datetime=False) -> None:
@@ -310,7 +310,7 @@ def sleep_until(date: Any, as_string=False, as_datetime=False) -> None:
 	match_condition.insert(ignore_permissions=True)
 	frappe.db.commit()
 
-	raise SuspendJob(f"sleep_until:{get_datetime_str(target_dt)}", target_timestamp=target_dt)
+	raise DeferredJob(f"sleep_until:{get_datetime_str(target_dt)}", target_timestamp=target_dt)
 
 
 def sleep_for(
@@ -411,7 +411,7 @@ def wait_for(
 	match_condition.insert(ignore_permissions=True)
 	frappe.db.commit()
 
-	raise SuspendJob(event_key, target_timestamp=target_dt)
+	raise DeferredJob(event_key, target_timestamp=target_dt)
 
 
 def _job_matches_in_msg(item_str: str, target_job_id: str) -> bool:

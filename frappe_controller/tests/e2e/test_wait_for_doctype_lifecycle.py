@@ -28,7 +28,7 @@ class TestWaitForDocTypeLifecycle(IntegrationTestCase):
 		frappe.db.commit()
 
 	def test_e2e_doctype_lifecycle_suspension_and_wake(self):
-		from frappe_controller.utils.controller import SuspendJob, handle_doc_event, process_telemetry_messages
+		from frappe_controller.utils.controller import DeferredJob, handle_doc_event, process_telemetry_messages
 
 		cache = frappe.cache()
 		cache.delete("fs:deferred:low")
@@ -47,7 +47,7 @@ class TestWaitForDocTypeLifecycle(IntegrationTestCase):
 		frappe.flags.current_job_id = job.name
 
 		# 1. Job calls frappe.wait_for
-		with self.assertRaises(SuspendJob):
+		with self.assertRaises(DeferredJob):
 			frappe.wait_for(event_key="on_update", filters={"doctype": "Customer", "customer_name": "Acme Corp"})
 
 		# 2. Verify FS Match Condition created

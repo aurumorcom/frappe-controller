@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 import frappe
 from frappe.tests import UnitTestCase
 from frappe_controller.utils.controller import (
+	DeferredJob,
 	JobResult,
-	SuspendJob,
 	calculate_target_timestamp,
 	evaluate_frappe_filters,
 	publish_event,

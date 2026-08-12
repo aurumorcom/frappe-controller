@@ -37,7 +37,7 @@ class TestWaitForChildJobResultChaining(IntegrationTestCase):
 		frappe.db.commit()
 
 	def test_e2e_child_job_result_ok_inspection(self):
-		from frappe_controller.utils.background_jobs import JobPromise
+		from frappe_controller.utils.background_jobs import Job
 
 		child_job = frappe.get_doc({
 			"doctype": "FS Job",
@@ -49,8 +49,8 @@ class TestWaitForChildJobResultChaining(IntegrationTestCase):
 			"arguments": "{}"
 		}).insert()
 
-		promise = JobPromise(child_job.name)
-		res = promise.result()
+		job_handle = Job(child_job.name)
+		res = job_handle.result()
 
 		self.assertTrue(isinstance(res, JobResult))
 		self.assertTrue(res.is_success)
@@ -58,7 +58,7 @@ class TestWaitForChildJobResultChaining(IntegrationTestCase):
 		self.assertEqual(res.result, {"count": 10})
 
 	def test_e2e_child_job_result_failed_inspection(self):
-		from frappe_controller.utils.background_jobs import get_job_result, JobPromise
+		from frappe_controller.utils.background_jobs import get_job_result, Job
 
 		child_job = frappe.get_doc({
 			"doctype": "FS Job",
@@ -76,9 +76,9 @@ class TestWaitForChildJobResultChaining(IntegrationTestCase):
 		self.assertFalse(res.is_success)
 		self.assertEqual(res.exc_info, "Database Connection Refused")
 
-		promise = JobPromise(child_job.name)
+		job_handle = Job(child_job.name)
 		with self.assertRaises(Exception) as cm:
-			promise.result()
+			job_handle.result()
 		self.assertIn("failed", str(cm.exception))
 
 

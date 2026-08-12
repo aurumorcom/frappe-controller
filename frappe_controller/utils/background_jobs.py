@@ -7,7 +7,7 @@ import frappe
 from frappe.utils import now_datetime
 
 
-class JobPromise:
+class Job:
 	def __init__(self, job_id):
 		self.job_id = job_id
 
@@ -34,7 +34,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 	"""
 	Replacement for frappe.enqueue.
 	Instead of enqueuing directly to Redis, it creates a Controller Job record in MariaDB.
-	Returns a JobPromise object.
+	Returns a Job object.
 	"""
 	import json
 
@@ -53,7 +53,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 
 		existing_job = frappe.db.get_value("FS Job", {"parent_job": parent_job_id, "idx": current_idx}, "name")
 		if existing_job:
-			return JobPromise(existing_job)
+			return Job(existing_job)
 
 	# Find or create the Controller Job Type for this method
 	job_type_name = frappe.db.exists("Controller Job Type", {"method": method})
@@ -90,7 +90,7 @@ def enqueue(method, queue="low", timeout=None, is_async=True, as_child=True, **k
 			lambda: frappe.cache().xadd(f"fs:queue:{queue}", {"payload": json.dumps(job_payload, default=str)})
 		)
 
-	return JobPromise(job.name)
+	return Job(job.name)
 
 
 def get_job_result(job_name: str):
@@ -347,9 +347,9 @@ def create_app(redis_url="redis://localhost:13000"):
                         with anyio.fail_after(job_timeout):
                             result = await run_frappe()
                     except (Exception, TimeoutError) as e:
-                        from frappe_controller.utils.controller import SuspendJob
+                        from frappe_controller.utils.controller import DeferredJob
 
-                        if isinstance(e, SuspendJob):
+                        if isinstance(e, DeferredJob):
                             status = "suspended"
                             worker_logger.info(f"Job {job_id} suspended waiting for {e.event_key}")
 
