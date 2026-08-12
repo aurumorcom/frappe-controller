@@ -267,7 +267,7 @@ class TestWaitForEvent(IntegrationTestCase):
 		self.assertEqual(result.get("id"), 1)
 
 	def test_wait_for_event_suspension(self):
-		from frappe_controller.utils.controller import SuspendJob, wait_for_event
+		from frappe_controller.utils.controller import DeferredJob, wait_for_event
 
 		# 1. Create a job manually
 		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
@@ -283,8 +283,8 @@ class TestWaitForEvent(IntegrationTestCase):
 		frappe.flags.current_job_id = job_id
 		job.db_set("started_at", frappe.utils.now_datetime())
 
-		# 2. Call wait_for_event - should raise SuspendJob
-		with self.assertRaises(SuspendJob) as cm:
+		# 2. Call wait_for_event - should raise DeferredJob
+		with self.assertRaises(DeferredJob) as cm:
 			wait_for_event("test_event", consider_events_since=job.started_at)
 
 		self.assertEqual(cm.exception.event_key, "test_event")
@@ -293,7 +293,7 @@ class TestWaitForEvent(IntegrationTestCase):
 		self.assertTrue(frappe.db.exists("FS Match Condition", {"job": job_id, "event_key": "test_event"}))
 
 	def test_wait_for_event_with_condition(self):
-		from frappe_controller.utils.controller import SuspendJob, emit_event, wait_for_event
+		from frappe_controller.utils.controller import DeferredJob, emit_event, wait_for_event
 
 		# 1. Create a job manually
 		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
@@ -313,7 +313,7 @@ class TestWaitForEvent(IntegrationTestCase):
 		emit_event("test_event", {"status": "pending"})
 
 		# 3. Call wait_for_event - should still suspend because condition not met
-		with self.assertRaises(SuspendJob):
+		with self.assertRaises(DeferredJob):
 			wait_for_event("test_event", condition="argument.get('status') == 'ok'", consider_events_since=job.started_at)
 
 		# 4. Emit event that matches condition
@@ -673,7 +673,7 @@ class TestWaitForUniversal(IntegrationTestCase):
 		self.assertEqual(res.get("status"), "ok")
 
 	def test_wait_for_duration_sleep(self):
-		from frappe_controller.utils.controller import SuspendJob, wait_for
+		from frappe_controller.utils.controller import DeferredJob, wait_for
 
 		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
 		job = frappe.get_doc({
@@ -686,7 +686,7 @@ class TestWaitForUniversal(IntegrationTestCase):
 		}).insert()
 		frappe.flags.current_job_id = job.name
 
-		with self.assertRaises(SuspendJob):
+		with self.assertRaises(DeferredJob):
 			wait_for(seconds=10)
 
 		cond_fields = ["name", "job"]
@@ -697,7 +697,7 @@ class TestWaitForUniversal(IntegrationTestCase):
 		self.assertEqual(len(cond), 1)
 
 	def test_wait_for_compound_event_or_timeout(self):
-		from frappe_controller.utils.controller import SuspendJob, wait_for
+		from frappe_controller.utils.controller import DeferredJob, wait_for
 
 		job_type_name = frappe.db.get_value("Controller Job Type", {"method": "frappe.ping"})
 		job = frappe.get_doc({
@@ -710,7 +710,7 @@ class TestWaitForUniversal(IntegrationTestCase):
 		}).insert()
 		frappe.flags.current_job_id = job.name
 
-		with self.assertRaises(SuspendJob):
+		with self.assertRaises(DeferredJob):
 			wait_for(event_key="compound_evt", hours=1)
 
 		cond_fields = ["name", "job", "event_key"]
