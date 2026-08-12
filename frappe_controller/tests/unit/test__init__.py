@@ -107,11 +107,11 @@ class TestFrappeControllerEnqueuePatch(UnitTestCase):
 
         method_name = f"{my_func.__module__}.{my_func.__qualname__}"
         self.mock_get_hooks.return_value = {method_name: {}}
-        self.mock_controller_enqueue.return_value = "JobPromise"
+        self.mock_controller_enqueue.return_value = "Job"
 
         result = frappe.enqueue(my_func, queue="default")
 
-        self.assertEqual(result, "JobPromise")
+        self.assertEqual(result, "Job")
         self.mock_original_enqueue.assert_not_called()
         self.mock_controller_enqueue.assert_called_once_with(
             method=method_name,
