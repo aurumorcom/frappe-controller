@@ -411,7 +411,7 @@ def wait_for(
 	match_condition.insert(ignore_permissions=True)
 	frappe.db.commit()
 
-	raise SuspendJob(event_key, target_timestamp=target_dt)
+	raise DeferredJob(event_key, target_timestamp=target_dt)
 
 
 def _job_matches_in_msg(item_str: str, target_job_id: str) -> bool:
